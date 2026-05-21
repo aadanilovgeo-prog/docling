@@ -1,4 +1,4 @@
-# Podderzhivaemye formaty (run_docling_parse_v1.3.bat)
+# Поддерживаемые форматы (run_docling_parse_v1.3.bat)
 
 | Gruppa | Rasshireniya | Docling `--from` | Osobennosti |
 |--------|-------------|------------------|-------------|
