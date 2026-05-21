@@ -4,16 +4,20 @@
 
 ## Windows
 
-Скрипты версионируются в имени файла: `run_docling_parse_v1.0.bat`, далее `v1.1`, `v2.0` и т.д.
+Скрипты версионируются в имени файла: `run_docling_parse_v1.0.bat`, `v1.1`, …
 
-**Текущая версия: 1.0** — `run_docling_parse_v1.0.bat`
+**Текущая версия: 1.1** — `run_docling_parse_v1.1.bat`
 
-Пакетный парсинг файлов из `docs` в `parsed` с логами в `logs`. Скрипт можно запускать из любой папки: пути к данным заданы абсолютными (по умолчанию `C:\Users\andrey.danilov\Documents\VTB\docling\`). Результаты сохраняются **напрямую в `parsed\`** (без подпапок). Инкрементальный режим: если уже есть `parsed\<ключ>.md` и `.json`, файл пропускается (`[SKIP]`).
+- Выход: только **Markdown** и **HTML** в `parsed\` (без json, text, yaml)
+- Изображения: `placeholder` (без отдельных файлов-артефактов)
+- **PPTX/DOCX/XLSX**: без OCR с первой попытки + `--from pptx|docx|xlsx`
+- **PDF**: `--pdf-backend pypdfium2`, OCR только на 1-й попытке
+- Инкрементальный SKIP: если есть `parsed\<ключ>.md` и `.html`
 
 ```bat
-run_docling_parse_v1.0.bat
+run_docling_parse_v1.1.bat
 ```
 
-Перед запуском установите Docling (`pip install docling`) и убедитесь, что `docling` доступен в `PATH`.
+Пути по умолчанию: `C:\Users\andrey.danilov\Documents\VTB\docling\` (`docs`, `parsed`, `logs`, `work`).
 
-На Windows при кириллице в именах PDF скрипт копирует файл в `work\`, задаёт отдельный `TEMP` в `work\tmp` и для PDF использует `--pdf-backend pypdfium2`. При ошибке — 3 попытки (1 + 2 повтора); повторы 2–3 идут с `--no-ocr`, если не удаётся загрузить модели OCR.
+Перед запуском: `pip install docling`, команда `docling` в `PATH`. Для PPTX закройте файл в PowerPoint.
