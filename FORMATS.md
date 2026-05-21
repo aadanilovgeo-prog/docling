@@ -1,4 +1,4 @@
-# Поддерживаемые форматы (run_docling_parse_v1.4.bat)
+# Поддерживаемые форматы (run_docling_parse_v1.5.bat)
 
 | Gruppa | Rasshireniya | Docling `--from` | Osobennosti |
 |--------|-------------|------------------|-------------|
@@ -12,6 +12,8 @@
 | XML | xml | auto | uspto / jats / xbrl |
 
 **Vyhod:** tolko `parsed\<klyuch>.md` i `parsed\<klyuch>.html`
+
+**Work copy:** fajly s kiriillicej i skobkami v imeni kopiruyutsya v `work\job_<N>_<random>.ext`, rezultat pereimenovyvaetsya v `<klyuch>.md/html`.
 
 ## Dopolnitelno ustanovit
 
