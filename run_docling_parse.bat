@@ -3,21 +3,19 @@ setlocal EnableExtensions EnableDelayedExpansion
 
 REM ============================================================================
 REM  Docling CLI - batch parse (incremental)
-REM  Polozhite etot fajl v papku docling (ryadom s docs, parsed, logs).
+REM  BAT mozhno zapuskat iz lyuboj papki na diske - puti fiksirovany nizhe.
 REM ============================================================================
-
-cd /d "%~dp0"
 
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
 chcp 65001 >nul 2>&1
 
-REM Puti otnositelno papki, gde lezhit BAT-fajl
-set "BASE_DIR=%~dp0"
-set "INPUT_DIR=%BASE_DIR%docs"
-set "OUTPUT_DIR=%BASE_DIR%parsed"
-set "LOG_DIR=%BASE_DIR%logs"
-set "WORK_DIR=%BASE_DIR%work"
+REM --- Fiksirovannye puti (menyaite pri neobhodimosti) ------------------------
+set "ROOT_DIR=C:\Users\andrey.danilov\Documents\VTB\docling"
+set "INPUT_DIR=%ROOT_DIR%\docs"
+set "OUTPUT_DIR=%ROOT_DIR%\parsed"
+set "LOG_DIR=%ROOT_DIR%\logs"
+set "WORK_DIR=%ROOT_DIR%\work"
 set "TMP_DIR=%WORK_DIR%\tmp"
 
 set "INPUT_NORM=%INPUT_DIR%"
@@ -32,7 +30,8 @@ set /a RETRY_DELAY_SEC=5
 
 call :PrintLine "========================================"
 call :PrintLine "Docling batch: START"
-call :PrintLine "Folder: %BASE_DIR%"
+call :PrintLine "BAT: %~f0"
+call :PrintLine "Root: %ROOT_DIR%"
 call :PrintLine "========================================"
 
 call :EnsureDir "%OUTPUT_DIR%"
@@ -50,8 +49,7 @@ set "LOG_FILE=%LOG_DIR%\docling_%LOG_STAMP%.log"
 REM Sozdaem pustoj log (inache >> padaet esli papki net)
 type nul > "%LOG_FILE%" 2>nul
 if not exist "%LOG_FILE%" (
-    set "LOG_DIR=%BASE_DIR%"
-    set "LOG_FILE=%LOG_DIR%\docling_%LOG_STAMP%.log"
+    set "LOG_FILE=%ROOT_DIR%\docling_%LOG_STAMP%.log"
     type nul > "%LOG_FILE%" 2>nul
 )
 
@@ -229,7 +227,7 @@ exit /b 0
 REM ============================================================================
 :AppendLog
 >> "!LOG_FILE!" echo %~1 2>nul
-if errorlevel 1 >> "%BASE_DIR%docling_fallback.log" echo %~1
+if errorlevel 1 >> "%ROOT_DIR%\docling_fallback.log" echo %~1
 exit /b 0
 
 REM ============================================================================
