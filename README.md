@@ -1,19 +1,26 @@
 # docling
 
-Утилиты для пакетной обработки документов через [Docling CLI](https://docling-project.github.io/docling/).
+Пакетная обработка документов через [Docling CLI](https://docling-project.github.io/docling/).
 
-## Windows
+## Скрипт
 
-Скрипты версионируются в имени файла: `run_docling_parse_v1.0.bat`, далее `v1.1`, `v2.0` и т.д.
+**`run_docling_parse_v1.3.bat`** — единственный BAT-файл в репозитории.
 
-**Текущая версия: 1.0** — `run_docling_parse_v1.0.bat`
-
-Пакетный парсинг файлов из `docs` в `parsed` с логами в `logs`. Скрипт можно запускать из любой папки: пути к данным заданы абсолютными (по умолчанию `C:\Users\andrey.danilov\Documents\VTB\docling\`). Результаты сохраняются **напрямую в `parsed\`** (без подпапок). Инкрементальный режим: если уже есть `parsed\<ключ>.md` и `.json`, файл пропускается (`[SKIP]`).
+- Все форматы Docling — см. [FORMATS.md](FORMATS.md)
+- Выход: только **md** и **html** в `parsed\`
+- Полный отчёт в консоли и логе
 
 ```bat
-run_docling_parse_v1.0.bat
+run_docling_parse_v1.3.bat
 ```
 
-Перед запуском установите Docling (`pip install docling`) и убедитесь, что `docling` доступен в `PATH`.
+Пути: `C:\Users\andrey.danilov\Documents\VTB\docling\` (`docs`, `parsed`, `logs`, `work`)
 
-На Windows при кириллице в именах PDF скрипт копирует файл в `work\`, задаёт отдельный `TEMP` в `work\tmp` и для PDF использует `--pdf-backend pypdfium2`. При ошибке — 3 попытки (1 + 2 повтора); повторы 2–3 идут с `--no-ocr`, если не удаётся загрузить модели OCR.
+## Установка
+
+```bat
+pip install docling
+pip install "docling[asr]"
+```
+
+Для видео нужен **ffmpeg**. Перед запуском закройте файлы в Office.
