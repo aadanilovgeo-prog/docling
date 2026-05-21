@@ -1,26 +1,22 @@
 # docling
 
-Пакетная обработка документов через [Docling CLI](https://docling-project.github.io/docling/).
+Пакетная обработка через [Docling CLI](https://docling-project.github.io/docling/).
 
 ## Скрипт
 
-**`run_docling_parse_v1.3.bat`** — единственный BAT-файл в репозитории.
+**`run_docling_parse_v1.4.bat`** — единственный BAT в репозитории (версия **1.4**).
 
-- Все форматы Docling — см. [FORMATS.md](FORMATS.md)
+- Запуск через `cmd /k` — окно не закрывается сразу
+- Все форматы Docling — [FORMATS.md](FORMATS.md)
 - Выход: только **md** и **html** в `parsed\`
-- Полный отчёт в консоли и логе
 
 ```bat
-run_docling_parse_v1.3.bat
+run_docling_parse_v1.4.bat
 ```
 
-Пути: `C:\Users\andrey.danilov\Documents\VTB\docling\` (`docs`, `parsed`, `logs`, `work`)
-
-## Установка
+Пути: `C:\Users\andrey.danilov\Documents\VTB\docling\`
 
 ```bat
 pip install docling
 pip install "docling[asr]"
 ```
-
-Для видео нужен **ffmpeg**. Перед запуском закройте файлы в Office.
