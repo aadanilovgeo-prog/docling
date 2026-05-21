@@ -1,23 +1,39 @@
 # docling
 
-Утилиты для пакетной обработки документов через [Docling CLI](https://docling-project.github.io/docling/).
+Пакетная обработка документов через [Docling CLI](https://docling-project.github.io/docling/).
 
-## Windows
+## Актуальный скрипт
 
-Скрипты версионируются в имени файла: `run_docling_parse_v1.0.bat`, `v1.1`, …
+**`run_docling_parse_v1.2.bat`** — все форматы из [справки Docling](https://docling-project.github.io/docling/usage/supported_formats/), выход только **md + html**.
 
-**Текущая версия: 1.1** — `run_docling_parse_v1.1.bat`
-
-- Выход: только **Markdown** и **HTML** в `parsed\` (без json, text, yaml)
-- Изображения: `placeholder` (без отдельных файлов-артефактов)
-- **PPTX/DOCX/XLSX**: без OCR с первой попытки + `--from pptx|docx|xlsx`
-- **PDF**: `--pdf-backend pypdfium2`, OCR только на 1-й попытке
-- Инкрементальный SKIP: если есть `parsed\<ключ>.md` и `.html`
+Подробная таблица: [FORMATS.md](FORMATS.md)
 
 ```bat
-run_docling_parse_v1.1.bat
+run_docling_parse_v1.2.bat
 ```
 
-Пути по умолчанию: `C:\Users\andrey.danilov\Documents\VTB\docling\` (`docs`, `parsed`, `logs`, `work`).
+Пути (можно менять в BAT): `C:\Users\andrey.danilov\Documents\VTB\docling\`
 
-Перед запуском: `pip install docling`, команда `docling` в `PATH`. Для PPTX закройте файл в PowerPoint.
+| Папка | Назначение |
+|-------|------------|
+| `docs` | Входные файлы |
+| `parsed` | Результаты `.md` и `.html` |
+| `logs` | Логи запуска |
+| `work` | Временные копии |
+
+## Установка
+
+```bat
+pip install docling
+pip install "docling[asr]"
+```
+
+Для **mp4/avi/mov** нужен **ffmpeg** в PATH. Для **pptx/docx/xlsx** закройте файл в Office перед запуском.
+
+## Версии BAT
+
+| Файл | Версия |
+|------|--------|
+| `run_docling_parse_v1.2.bat` | текущий |
+| `run_docling_parse_v1.1.bat` | pptx fix, md+html |
+| `run_docling_parse_v1.0.bat` | устарел |
