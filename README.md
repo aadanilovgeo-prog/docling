@@ -11,3 +11,5 @@ run_docling_parse.bat
 ```
 
 Перед запуском установите Docling (`pip install docling`) и убедитесь, что `docling` доступен в `PATH`.
+
+На Windows при кириллице в именах PDF скрипт копирует файл в `work\` с ASCII-именем, задаёт отдельный `TEMP` в `work\tmp` и для PDF использует `--pdf-backend pypdfium2` (обход [docling-parse#116](https://github.com/docling-project/docling-parse/issues/116)). При `WinError 32` выполняются до 3 повторов с паузой 5 с — закройте PDF в просмотрщике и при необходимости добавьте папку `docling` в исключения антивируса.
