@@ -3,9 +3,12 @@ setlocal EnableExtensions EnableDelayedExpansion
 
 REM ============================================================================
 REM  Docling CLI - inkrementalnyj parsing
+REM  Versiya: 1.0
 REM  Vyhod: tolko fajly v parsed\ (bez podpapok)
 REM  Pri oshibke: 3 popytki (1 + 2 povtora), mezhdu nimi ochistka musora
 REM ============================================================================
+
+set "SCRIPT_VERSION=1.0"
 
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
@@ -30,7 +33,7 @@ set /a MAX_ATTEMPTS=3
 set /a RETRY_DELAY_SEC=5
 
 call :PrintLine "========================================"
-call :PrintLine "Docling batch: START"
+call :PrintLine "Docling batch: START v!SCRIPT_VERSION!"
 call :PrintLine "BAT: %~f0"
 call :PrintLine "Root: %ROOT_DIR%"
 call :PrintLine "========================================"
@@ -67,7 +70,7 @@ if not exist "%INPUT_DIR%" (
 )
 
 call :AppendLog "============================================================"
-call :AppendLog "Started"
+call :AppendLog "Started v!SCRIPT_VERSION!"
 call :AppendLog "Input: %INPUT_DIR%"
 call :AppendLog "Output: %OUTPUT_DIR% (flat, no subfolders)"
 
