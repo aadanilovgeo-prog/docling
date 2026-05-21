@@ -2,33 +2,32 @@
 setlocal EnableExtensions EnableDelayedExpansion
 
 REM ============================================================================
-REM  Пакетный запуск Docling CLI с инкрементальным парсингом
-REM  Документация: https://docling-project.github.io/docling/
-REM
-REM  Обход WinError 32 / кириллицы в именах (см. docling-parse #116):
-REM    - копия исходника в ASCII-имя в папке work\
-REM    - отдельный TEMP без кириллицы
-REM    - для PDF: --pdf-backend pypdfium2
-REM    - повторные попытки при блокировке файла
+REM  Docling CLI - batch parse (incremental)
+REM  https://docling-project.github.io/docling/
 REM ============================================================================
 
-REM --- Кодировка консоли и Python (кириллица в путях docs\) -------------------
-chcp 65001 >nul 2>&1
+cd /d "%~dp0"
+
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
+chcp 65001 >nul 2>&1
 
-REM --- Настраиваемые пути -----------------------------------------------------
+call :PrintLine "========================================"
+call :PrintLine "Docling batch: START"
+call :PrintLine "BAT file: %~f0"
+call :PrintLine "========================================"
+
+REM --- Paths ------------------------------------------------------------------
 set "INPUT_DIR=C:\Users\andrey.danilov\Documents\VTB\docling\docs"
 set "OUTPUT_DIR=C:\Users\andrey.danilov\Documents\VTB\docling\parsed"
 set "LOG_DIR=C:\Users\andrey.danilov\Documents\VTB\docling\logs"
 set "WORK_DIR=C:\Users\andrey.danilov\Documents\VTB\docling\work"
 set "TMP_DIR=%WORK_DIR%\tmp"
 
-REM Нормализованный путь входа (без завершающего \)
 set "INPUT_NORM=%INPUT_DIR%"
 if /i "%INPUT_NORM:~-1%"=="\" set "INPUT_NORM=%INPUT_NORM:~0,-1%"
 
-REM --- Счётчики ---------------------------------------------------------------
+REM --- Counters ---------------------------------------------------------------
 set /a TOTAL=0
 set /a PARSED_COUNT=0
 set /a SKIPPED_COUNT=0
@@ -36,134 +35,121 @@ set /a ERROR_COUNT=0
 set /a MAX_RETRIES=3
 set /a RETRY_DELAY_SEC=5
 
-REM --- Метка времени для имени лог-файла (YYYY-MM-DD_HH-MM-SS) ----------------
-set "LOG_STAMP="
-for /f "tokens=2 delims==" %%a in ('wmic os get LocalDateTime /value 2^>nul') do set "LOG_STAMP=%%a"
+REM --- Log file name (no wmic - works on Win11) -------------------------------
+call :MakeLogTimestamp LOG_STAMP
 if not defined LOG_STAMP (
-    echo [ERROR] Не удалось получить системную дату/время.
-    exit /b 1
+    call :PrintLine "[ERROR] Cannot build log timestamp."
+    goto :FinishWithPause
 )
-set "LOG_DATE=!LOG_STAMP:~0,4!-!LOG_STAMP:~4,2!-!LOG_STAMP:~6,2!"
-set "LOG_TIME=!LOG_STAMP:~8,2!-!LOG_STAMP:~10,2!-!LOG_STAMP:~12,2!"
-set "LOG_FILE=%LOG_DIR%\docling_!LOG_DATE!_!LOG_TIME!.log"
+set "LOG_FILE=%LOG_DIR%\docling_%LOG_STAMP%.log"
 
-REM --- Проверка наличия Docling в PATH ----------------------------------------
 where docling >nul 2>&1
 if errorlevel 1 (
-    echo Docling не найден. Проверь, что он установлен и добавлен в PATH.
-    exit /b 1
+    call :PrintLine "Docling not found. Install docling and add it to PATH."
+    call :PrintLine "Example: pip install docling"
+    goto :FinishWithPause
 )
 
-REM --- Создание служебных каталогов -------------------------------------------
-if not exist "%OUTPUT_DIR%" mkdir "%OUTPUT_DIR%"
-if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
-if not exist "%WORK_DIR%" mkdir "%WORK_DIR%"
-if not exist "%TMP_DIR%" mkdir "%TMP_DIR%"
+if not exist "%OUTPUT_DIR%" mkdir "%OUTPUT_DIR%" 2>nul
+if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" 2>nul
+if not exist "%WORK_DIR%" mkdir "%WORK_DIR%" 2>nul
+if not exist "%TMP_DIR%" mkdir "%TMP_DIR%" 2>nul
 
-REM Docling/Python пишут временные файлы сюда (только ASCII в пути)
 set "TEMP=%TMP_DIR%"
 set "TMP=%TMP_DIR%"
 
-REM --- Проверка входной папки -------------------------------------------------
 if not exist "%INPUT_DIR%" (
-    echo [ERROR] Входная папка не найдена: "%INPUT_DIR%"
-    exit /b 1
+    call :PrintLine "[ERROR] Input folder not found:"
+    call :PrintLine "%INPUT_DIR%"
+    goto :FinishWithPause
 )
 
-REM --- Заголовок лога -----------------------------------------------------------
 (
     echo ============================================================
-    echo Docling batch parse ^(incremental^)
-    echo Started: !LOG_DATE! !LOG_TIME!
+    echo Docling batch parse
+    echo Started: %LOG_STAMP%
     echo Input:   "%INPUT_DIR%"
     echo Output:  "%OUTPUT_DIR%"
     echo Work:    "%WORK_DIR%"
     echo Temp:    "%TMP_DIR%"
     echo Log:     "%LOG_FILE%"
     echo ============================================================
-) >> "%LOG_FILE%"
+) >> "%LOG_FILE%" 2>&1
 
-echo.
-echo Docling: инкрементальная обработка документов
-echo Вход:  "%INPUT_DIR%"
-echo Выход: "%OUTPUT_DIR%"
-echo Work:  "%WORK_DIR%"
-echo Лог:   "%LOG_FILE%"
-echo.
+call :PrintLine ""
+call :PrintLine "Input:  %INPUT_DIR%"
+call :PrintLine "Output: %OUTPUT_DIR%"
+call :PrintLine "Log:    %LOG_FILE%"
+call :PrintLine "Scanning files..."
+call :PrintLine ""
 
-REM --- Обход всех файлов во входной папке и подпапках -------------------------
 for /r "%INPUT_DIR%" %%F in (*) do (
-    REM Пропуск временных/блокировочных файлов Office (~$...)
-    set "BASE_ONLY=%%~nxF"
-    if not "!BASE_ONLY:~0,2!"=="~$" (
-        set "FILE_EXT=%%~xF"
-        if defined FILE_EXT (
-            set "FILE_EXT=!FILE_EXT:~1!"
-            call :IsSupportedExt "!FILE_EXT!" SUPPORTED
+    set "ITEM_NAME=%%~nxF"
+    if not "!ITEM_NAME:~0,2!"=="~$" (
+        if /i not "%%~xF"=="" (
+            set "ITEM_EXT=%%~xF"
+            set "ITEM_EXT=!ITEM_EXT:~1!"
+            call :IsSupportedExt "!ITEM_EXT!" SUPPORTED
             if "!SUPPORTED!"=="1" (
-                call :HandleOneFile "%%F"
+                call :HandleOneFile "%%~fF"
             )
         )
     )
 )
 
-REM --- Итоговая статистика ------------------------------------------------------
-echo.
-echo ============================================================
-echo Total files found: !TOTAL!
-echo Parsed:            !PARSED_COUNT!
-echo Skipped:           !SKIPPED_COUNT!
-echo Errors:            !ERROR_COUNT!
-echo ============================================================
-echo Лог сохранён: "%LOG_FILE%"
-echo.
+call :PrintLine ""
+call :PrintLine "========================================"
+call :PrintLine "Total files found: !TOTAL!"
+call :PrintLine "Parsed:            !PARSED_COUNT!"
+call :PrintLine "Skipped:           !SKIPPED_COUNT!"
+call :PrintLine "Errors:            !ERROR_COUNT!"
+call :PrintLine "========================================"
+
+if !TOTAL! equ 0 (
+    call :PrintLine "WARNING: No supported files found in docs folder."
+    call :PrintLine "Put PDF/DOCX/... into: %INPUT_DIR%"
+)
+
+call :PrintLine "Log file: %LOG_FILE%"
 
 (
     echo.
-    echo ============================================================
     echo Finished
-    echo Total files found: !TOTAL!
-    echo Parsed:            !PARSED_COUNT!
-    echo Skipped:           !SKIPPED_COUNT!
-    echo Errors:            !ERROR_COUNT!
-    echo ============================================================
-) >> "%LOG_FILE%"
+    echo Total: !TOTAL!
+    echo Parsed: !PARSED_COUNT!
+    echo Skipped: !SKIPPED_COUNT!
+    echo Errors: !ERROR_COUNT!
+) >> "%LOG_FILE%" 2>&1
 
-endlocal
-exit /b 0
+goto :FinishWithPause
 
-REM ============================================================================
-REM  Обработка одного файла: SKIP если результат уже есть, иначе PARSE
 REM ============================================================================
 :HandleOneFile
 set "SRC_FILE=%~1"
-set "FILE_NAME=%~nx1"
-set "FILE_EXT=%~x1"
-
 set /a TOTAL+=1
 
-call :GetOutputPath "%SRC_FILE%" FILE_OUT REL_PATH
+call :GetOutputPath "%SRC_FILE%" FILE_OUT
 if not defined FILE_OUT exit /b 0
 
-if exist "!FILE_OUT!\" (
+call :DirExists "!FILE_OUT!" DIR_EXISTS
+if "!DIR_EXISTS!"=="1" (
     set /a SKIPPED_COUNT+=1
-    echo [SKIP] !FILE_NAME!
-    echo [SKIP] "%SRC_FILE%" ^-^> "!FILE_OUT!" >> "%LOG_FILE%"
+    call :PrintStatus "[SKIP]" "%~nx1"
+    echo [SKIP] "%SRC_FILE%" >> "%LOG_FILE%"
     exit /b 0
 )
 
-echo [PARSE] "%SRC_FILE%" ^-^> "!FILE_OUT!" >> "%LOG_FILE%"
+echo [PARSE] "%SRC_FILE%" -^> "!FILE_OUT!" >> "%LOG_FILE%"
 
-REM Копия с ASCII-именем: Docling кладёт файл во Temp с исходным именем — кириллица ломает Windows
 call :MakeWorkCopy "%SRC_FILE%" WORK_SRC
 if not defined WORK_SRC (
     set /a ERROR_COUNT+=1
-    echo [ERROR] !FILE_NAME! ^(не удалось скопировать во временную папку^)
+    call :PrintStatus "[ERROR]" "%~nx1"
     echo [ERROR] copy failed "%SRC_FILE%" >> "%LOG_FILE%"
     exit /b 0
 )
 
-call :RunDoclingWithRetry "!WORK_SRC!" "!FILE_OUT!" "!FILE_EXT!"
+call :RunDoclingWithRetry "!WORK_SRC!" "!FILE_OUT!" "%~x1"
 set "PARSE_FAILED=0"
 if errorlevel 1 set "PARSE_FAILED=1"
 
@@ -171,37 +157,25 @@ if exist "!WORK_SRC!" del /f /q "!WORK_SRC!" 2>nul
 
 if "!PARSE_FAILED!"=="1" (
     set /a ERROR_COUNT+=1
-    echo [ERROR] !FILE_NAME!
+    call :PrintStatus "[ERROR]" "%~nx1"
     echo [ERROR] "%SRC_FILE%" >> "%LOG_FILE%"
-    if exist "!FILE_OUT!\" rd /s /q "!FILE_OUT!" 2>nul
+    call :RemoveDir "!FILE_OUT!"
 ) else (
     set /a PARSED_COUNT+=1
-    echo [PARSE] !FILE_NAME!
+    call :PrintStatus "[PARSE]" "%~nx1"
     echo [PARSE] done "%SRC_FILE%" >> "%LOG_FILE%"
 )
 exit /b 0
 
 REM ============================================================================
-REM  Копия исходника в work\ с ASCII-именем (job_N.ext)
-REM  Аргумент 2: имя переменной с полным путём копии
-REM ============================================================================
 :MakeWorkCopy
 set "%~2="
-set "SRC_COPY=%~1"
-set "COPY_NAME=job_!TOTAL!_!RANDOM!!RANDOM!%~x1"
-set "DEST_COPY=%WORK_DIR%\!COPY_NAME!"
-copy /y "!SRC_COPY!" "!DEST_COPY!" >nul 2>&1
-if errorlevel 1 (
-    exit /b 1
-)
+set "DEST_COPY=%WORK_DIR%\job_!TOTAL!_!RANDOM!!RANDOM!%~x1"
+copy /y "%~1" "!DEST_COPY!" >nul 2>&1
+if errorlevel 1 exit /b 1
 set "%~2=!DEST_COPY!"
 exit /b 0
 
-REM ============================================================================
-REM  Запуск Docling с повторами при WinError 32 (антивирус / блокировка Temp)
-REM  Аргумент 1: путь к файлу для CLI (ASCII-имя)
-REM  Аргумент 2: папка результата
-REM  Аргумент 3: расширение с точкой (.pdf и т.д.)
 REM ============================================================================
 :RunDoclingWithRetry
 set "CLI_SRC=%~1"
@@ -209,61 +183,69 @@ set "CLI_OUT=%~2"
 set "CLI_EXT=%~3"
 set /a ATTEMPT=0
 set "USE_PYPDF=0"
-if /i "!CLI_EXT!"==".pdf" set "USE_PYPDF=1"
+if /i "%CLI_EXT%"==".pdf" set "USE_PYPDF=1"
 
 :DoclingAttempt
 set /a ATTEMPT+=1
-echo Attempt !ATTEMPT!/!MAX_RETRIES! for "%CLI_SRC%" >> "%LOG_FILE%"
+echo Attempt !ATTEMPT!/!MAX_RETRIES!: "%CLI_SRC%" >> "%LOG_FILE%"
 
 if "!USE_PYPDF!"=="1" (
-    docling --to md --to json --to text --to html ^
-        --output "!CLI_OUT!" ^
-        --ocr ^
-        --tables ^
-        --table-mode accurate ^
-        --image-export-mode referenced ^
-        --pdf-backend pypdfium2 ^
-        -v ^
-        "!CLI_SRC!" >> "%LOG_FILE%" 2>&1
+    docling --to md --to json --to text --to html --output "%CLI_OUT%" --ocr --tables --table-mode accurate --image-export-mode referenced --pdf-backend pypdfium2 -v "%CLI_SRC%" >> "%LOG_FILE%" 2>&1
 ) else (
-    docling --to md --to json --to text --to html ^
-        --output "!CLI_OUT!" ^
-        --ocr ^
-        --tables ^
-        --table-mode accurate ^
-        --image-export-mode referenced ^
-        -v ^
-        "!CLI_SRC!" >> "%LOG_FILE%" 2>&1
+    docling --to md --to json --to text --to html --output "%CLI_OUT%" --ocr --tables --table-mode accurate --image-export-mode referenced -v "%CLI_SRC%" >> "%LOG_FILE%" 2>&1
 )
 
 if not errorlevel 1 exit /b 0
-
 if !ATTEMPT! lss !MAX_RETRIES! (
-    echo Retry after !RETRY_DELAY_SEC! sec... >> "%LOG_FILE%"
+    echo Retry in !RETRY_DELAY_SEC! sec... >> "%LOG_FILE%"
     timeout /t !RETRY_DELAY_SEC! /nobreak >nul
     goto DoclingAttempt
 )
 exit /b 1
 
 REM ============================================================================
-REM  Вычисление пути результата по исходному файлу
-REM ============================================================================
 :GetOutputPath
 set "%~2="
-set "%~3="
-set "SRC_FULL=%~1"
 set "SRC_DIR=%~dp1"
 set "BASE_NAME=%~n1"
-
-set "REL_PATH=!SRC_DIR:%INPUT_NORM%\=!"
-if /i "!REL_PATH!"=="!SRC_DIR!" set "REL_PATH="
-
+set "REL_PATH=%SRC_DIR%"
+set "REL_PATH=!REL_PATH:%INPUT_NORM%\=!"
+if /i "!REL_PATH!"=="%~dp1" set "REL_PATH="
 set "%~2=%OUTPUT_DIR%\!REL_PATH!!BASE_NAME!"
-set "%~3=!REL_PATH!"
 exit /b 0
 
 REM ============================================================================
-REM  Проверка расширения: поддерживается ли Docling
+:DirExists
+set "%~2=0"
+if exist "%~1\." set "%~2=1"
+exit /b 0
+
+REM ============================================================================
+:RemoveDir
+if exist "%~1\." rd /s /q "%~1" 2>nul
+exit /b 0
+
+REM ============================================================================
+:PrintStatus
+call :PrintLine "%~1 %~2"
+exit /b 0
+
+REM ============================================================================
+:PrintLine
+echo %~1
+exit /b 0
+
+REM ============================================================================
+:MakeLogTimestamp
+set "%~1="
+set "TS=%date%_%time%"
+set "TS=!TS: =0!"
+set "TS=!TS:/=-!"
+set "TS=!TS::=-!"
+set "TS=!TS:,=!"
+set "%~1=!TS!"
+exit /b 0
+
 REM ============================================================================
 :IsSupportedExt
 set "%~2=0"
@@ -299,4 +281,12 @@ if /i "%~1"=="mov" set "%~2=1" & exit /b 0
 if /i "%~1"=="vtt" set "%~2=1" & exit /b 0
 if /i "%~1"=="json" set "%~2=1" & exit /b 0
 if /i "%~1"=="xml" set "%~2=1" & exit /b 0
+exit /b 0
+
+REM ============================================================================
+:FinishWithPause
+echo.
+echo Press any key to close...
+pause >nul
+endlocal
 exit /b 0
