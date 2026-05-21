@@ -3,7 +3,7 @@ setlocal EnableExtensions EnableDelayedExpansion
 
 REM ============================================================================
 REM  Docling CLI - batch parse (incremental)
-REM  https://docling-project.github.io/docling/
+REM  Polozhite etot fajl v papku docling (ryadom s docs, parsed, logs).
 REM ============================================================================
 
 cd /d "%~dp0"
@@ -12,22 +12,17 @@ set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
 chcp 65001 >nul 2>&1
 
-call :PrintLine "========================================"
-call :PrintLine "Docling batch: START"
-call :PrintLine "BAT file: %~f0"
-call :PrintLine "========================================"
-
-REM --- Paths ------------------------------------------------------------------
-set "INPUT_DIR=C:\Users\andrey.danilov\Documents\VTB\docling\docs"
-set "OUTPUT_DIR=C:\Users\andrey.danilov\Documents\VTB\docling\parsed"
-set "LOG_DIR=C:\Users\andrey.danilov\Documents\VTB\docling\logs"
-set "WORK_DIR=C:\Users\andrey.danilov\Documents\VTB\docling\work"
+REM Puti otnositelno papki, gde lezhit BAT-fajl
+set "BASE_DIR=%~dp0"
+set "INPUT_DIR=%BASE_DIR%docs"
+set "OUTPUT_DIR=%BASE_DIR%parsed"
+set "LOG_DIR=%BASE_DIR%logs"
+set "WORK_DIR=%BASE_DIR%work"
 set "TMP_DIR=%WORK_DIR%\tmp"
 
 set "INPUT_NORM=%INPUT_DIR%"
 if /i "%INPUT_NORM:~-1%"=="\" set "INPUT_NORM=%INPUT_NORM:~0,-1%"
 
-REM --- Counters ---------------------------------------------------------------
 set /a TOTAL=0
 set /a PARSED_COUNT=0
 set /a SKIPPED_COUNT=0
@@ -35,52 +30,55 @@ set /a ERROR_COUNT=0
 set /a MAX_RETRIES=3
 set /a RETRY_DELAY_SEC=5
 
-REM --- Log file name (no wmic - works on Win11) -------------------------------
-call :MakeLogTimestamp LOG_STAMP
-if not defined LOG_STAMP (
-    call :PrintLine "[ERROR] Cannot build log timestamp."
-    goto :FinishWithPause
-)
-set "LOG_FILE=%LOG_DIR%\docling_%LOG_STAMP%.log"
+call :PrintLine "========================================"
+call :PrintLine "Docling batch: START"
+call :PrintLine "Folder: %BASE_DIR%"
+call :PrintLine "========================================"
 
-where docling >nul 2>&1
-if errorlevel 1 (
-    call :PrintLine "Docling not found. Install docling and add it to PATH."
-    call :PrintLine "Example: pip install docling"
-    goto :FinishWithPause
-)
-
-if not exist "%OUTPUT_DIR%" mkdir "%OUTPUT_DIR%" 2>nul
-if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" 2>nul
-if not exist "%WORK_DIR%" mkdir "%WORK_DIR%" 2>nul
-if not exist "%TMP_DIR%" mkdir "%TMP_DIR%" 2>nul
+call :EnsureDir "%OUTPUT_DIR%"
+call :EnsureDir "%LOG_DIR%"
+call :EnsureDir "%WORK_DIR%"
+call :EnsureDir "%TMP_DIR%"
 
 set "TEMP=%TMP_DIR%"
 set "TMP=%TMP_DIR%"
 
-if not exist "%INPUT_DIR%" (
-    call :PrintLine "[ERROR] Input folder not found:"
-    call :PrintLine "%INPUT_DIR%"
+call :MakeLogTimestamp LOG_STAMP
+if not defined LOG_STAMP set "LOG_STAMP=run_%RANDOM%"
+set "LOG_FILE=%LOG_DIR%\docling_%LOG_STAMP%.log"
+
+REM Sozdaem pustoj log (inache >> padaet esli papki net)
+type nul > "%LOG_FILE%" 2>nul
+if not exist "%LOG_FILE%" (
+    set "LOG_DIR=%BASE_DIR%"
+    set "LOG_FILE=%LOG_DIR%\docling_%LOG_STAMP%.log"
+    type nul > "%LOG_FILE%" 2>nul
+)
+
+where docling >nul 2>&1
+if errorlevel 1 (
+    call :PrintLine "Docling not found. Install: pip install docling"
+    call :AppendLog "ERROR: docling not in PATH"
     goto :FinishWithPause
 )
 
-(
-    echo ============================================================
-    echo Docling batch parse
-    echo Started: %LOG_STAMP%
-    echo Input:   "%INPUT_DIR%"
-    echo Output:  "%OUTPUT_DIR%"
-    echo Work:    "%WORK_DIR%"
-    echo Temp:    "%TMP_DIR%"
-    echo Log:     "%LOG_FILE%"
-    echo ============================================================
-) >> "%LOG_FILE%" 2>&1
+if not exist "%INPUT_DIR%" (
+    call :PrintLine "[ERROR] Papka docs ne najdena:"
+    call :PrintLine "%INPUT_DIR%"
+    call :AppendLog "ERROR: input dir missing: %INPUT_DIR%"
+    goto :FinishWithPause
+)
+
+call :AppendLog "============================================================"
+call :AppendLog "Started"
+call :AppendLog "Input: %INPUT_DIR%"
+call :AppendLog "Output: %OUTPUT_DIR%"
 
 call :PrintLine ""
 call :PrintLine "Input:  %INPUT_DIR%"
 call :PrintLine "Output: %OUTPUT_DIR%"
-call :PrintLine "Log:    %LOG_FILE%"
-call :PrintLine "Scanning files..."
+call :PrintLine "Log:    !LOG_FILE!"
+call :PrintLine "Scanning..."
 call :PrintLine ""
 
 for /r "%INPUT_DIR%" %%F in (*) do (
@@ -106,20 +104,14 @@ call :PrintLine "Errors:            !ERROR_COUNT!"
 call :PrintLine "========================================"
 
 if !TOTAL! equ 0 (
-    call :PrintLine "WARNING: No supported files found in docs folder."
-    call :PrintLine "Put PDF/DOCX/... into: %INPUT_DIR%"
+    call :PrintLine "WARNING: Net podderzhivaemyh fajlov v docs"
 )
 
-call :PrintLine "Log file: %LOG_FILE%"
+call :PrintLine ""
+call :PrintLine "Log file:"
+call :PrintLine "!LOG_FILE!"
 
-(
-    echo.
-    echo Finished
-    echo Total: !TOTAL!
-    echo Parsed: !PARSED_COUNT!
-    echo Skipped: !SKIPPED_COUNT!
-    echo Errors: !ERROR_COUNT!
-) >> "%LOG_FILE%" 2>&1
+call :AppendLog "Finished. Total=!TOTAL! Parsed=!PARSED_COUNT! Skipped=!SKIPPED_COUNT! Errors=!ERROR_COUNT!"
 
 goto :FinishWithPause
 
@@ -135,17 +127,17 @@ call :DirExists "!FILE_OUT!" DIR_EXISTS
 if "!DIR_EXISTS!"=="1" (
     set /a SKIPPED_COUNT+=1
     call :PrintStatus "[SKIP]" "%~nx1"
-    echo [SKIP] "%SRC_FILE%" >> "%LOG_FILE%"
+    call :AppendLog "[SKIP] %SRC_FILE%"
     exit /b 0
 )
 
-echo [PARSE] "%SRC_FILE%" -^> "!FILE_OUT!" >> "%LOG_FILE%"
+call :AppendLog "[PARSE] %SRC_FILE% -> !FILE_OUT!"
 
 call :MakeWorkCopy "%SRC_FILE%" WORK_SRC
 if not defined WORK_SRC (
     set /a ERROR_COUNT+=1
     call :PrintStatus "[ERROR]" "%~nx1"
-    echo [ERROR] copy failed "%SRC_FILE%" >> "%LOG_FILE%"
+    call :AppendLog "[ERROR] copy failed: %SRC_FILE%"
     exit /b 0
 )
 
@@ -158,12 +150,12 @@ if exist "!WORK_SRC!" del /f /q "!WORK_SRC!" 2>nul
 if "!PARSE_FAILED!"=="1" (
     set /a ERROR_COUNT+=1
     call :PrintStatus "[ERROR]" "%~nx1"
-    echo [ERROR] "%SRC_FILE%" >> "%LOG_FILE%"
+    call :AppendLog "[ERROR] %SRC_FILE%"
     call :RemoveDir "!FILE_OUT!"
 ) else (
     set /a PARSED_COUNT+=1
     call :PrintStatus "[PARSE]" "%~nx1"
-    echo [PARSE] done "%SRC_FILE%" >> "%LOG_FILE%"
+    call :AppendLog "[PARSE] done: %SRC_FILE%"
 )
 exit /b 0
 
@@ -187,17 +179,17 @@ if /i "%CLI_EXT%"==".pdf" set "USE_PYPDF=1"
 
 :DoclingAttempt
 set /a ATTEMPT+=1
-echo Attempt !ATTEMPT!/!MAX_RETRIES!: "%CLI_SRC%" >> "%LOG_FILE%"
+call :AppendLog "Attempt !ATTEMPT!/!MAX_RETRIES!: !CLI_SRC!"
 
 if "!USE_PYPDF!"=="1" (
-    docling --to md --to json --to text --to html --output "%CLI_OUT%" --ocr --tables --table-mode accurate --image-export-mode referenced --pdf-backend pypdfium2 -v "%CLI_SRC%" >> "%LOG_FILE%" 2>&1
+    docling --to md --to json --to text --to html --output "!CLI_OUT!" --ocr --tables --table-mode accurate --image-export-mode referenced --pdf-backend pypdfium2 -v "!CLI_SRC!" >> "!LOG_FILE!" 2>&1
 ) else (
-    docling --to md --to json --to text --to html --output "%CLI_OUT%" --ocr --tables --table-mode accurate --image-export-mode referenced -v "%CLI_SRC%" >> "%LOG_FILE%" 2>&1
+    docling --to md --to json --to text --to html --output "!CLI_OUT!" --ocr --tables --table-mode accurate --image-export-mode referenced -v "!CLI_SRC!" >> "!LOG_FILE!" 2>&1
 )
 
 if not errorlevel 1 exit /b 0
 if !ATTEMPT! lss !MAX_RETRIES! (
-    echo Retry in !RETRY_DELAY_SEC! sec... >> "%LOG_FILE%"
+    call :AppendLog "Retry in !RETRY_DELAY_SEC! sec..."
     timeout /t !RETRY_DELAY_SEC! /nobreak >nul
     goto DoclingAttempt
 )
@@ -215,6 +207,15 @@ set "%~2=%OUTPUT_DIR%\!REL_PATH!!BASE_NAME!"
 exit /b 0
 
 REM ============================================================================
+:EnsureDir
+if exist "%~1\." exit /b 0
+mkdir "%~1" 2>nul
+if exist "%~1\." exit /b 0
+if not "%~1"=="%~dp1" call :EnsureDir "%~dp1"
+mkdir "%~1" 2>nul
+exit /b 0
+
+REM ============================================================================
 :DirExists
 set "%~2=0"
 if exist "%~1\." set "%~2=1"
@@ -223,6 +224,12 @@ exit /b 0
 REM ============================================================================
 :RemoveDir
 if exist "%~1\." rd /s /q "%~1" 2>nul
+exit /b 0
+
+REM ============================================================================
+:AppendLog
+>> "!LOG_FILE!" echo %~1 2>nul
+if errorlevel 1 >> "%BASE_DIR%docling_fallback.log" echo %~1
 exit /b 0
 
 REM ============================================================================
@@ -238,11 +245,14 @@ exit /b 0
 REM ============================================================================
 :MakeLogTimestamp
 set "%~1="
-set "TS=%date%_%time%"
+set "TS=%RANDOM%_%RANDOM%_%TIME:~0,2%%TIME:~3,2%%TIME:~6,2%"
 set "TS=!TS: =0!"
+set "TS=!TS:,=!"
 set "TS=!TS:/=-!"
 set "TS=!TS::=-!"
-set "TS=!TS:,=!"
+set "TS=!TS:.=-!"
+set "TS=!TS:(=-!"
+set "TS=!TS:)=-!"
 set "%~1=!TS!"
 exit /b 0
 
