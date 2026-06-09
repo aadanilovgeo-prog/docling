@@ -5,14 +5,22 @@
 ## Запуск
 
 ```bat
-run_docling_parse_v1.5.bat
+pip install -r requirements.txt
+python run_docling_parse_v2.0.py
 ```
 
-Двойной щелчок — откроется окно `cmd`. Скрипт обрабатывает `docs\` → `parsed\` (только `.md` + `.html`).
+Двойной щелчок по `.py` (если Python ассоциирован с файлами) — окно останется открытым до Enter.
 
-Пути по умолчанию зашиты в BAT:
+### Параметры
 
-`C:\Users\andrey.danilov\Documents\VTB\docling\`
+| Параметр / переменная | Назначение |
+|-----------------------|------------|
+| `--root PATH` | Корень проекта (папки `docs`, `parsed`, …) |
+| `DOCLING_ROOT` | То же через env |
+| `--pause` | Ждать Enter в конце |
+| `PILLOW_MAX_IMAGE_PIXELS` | Лимит Pillow для больших PNG (по умолчанию `9999999999`) |
+
+По умолчанию **ROOT** = папка со скриптом.
 
 ---
 
@@ -23,9 +31,17 @@ run_docling_parse_v1.5.bat
 | `docs` | Вход, рекурсивно |
 | `parsed` | `.md` + `.html` |
 | `logs` | Логи |
-| `work` | Рабочие копии файлов |
+| `work` | Рабочие копии (`job_*`) |
 
 Форматы: [FORMATS.md](FORMATS.md)
+
+## Поведение (как в BAT v1.6)
+
+- Рекурсивный обход `docs\`
+- Пропуск готовых пар `.md` + `.html`
+- 3 попытки, OCR на 1-й для PDF/изображений
+- Work copy в `work\job_<N>_<random>.ext`
+- Лог: `logs\docling_YYYYMMDD_HHMMSS_*.log`
 
 ## Docling
 
