@@ -2,8 +2,10 @@
 """
 Надёжная склейка длинного скриншота страницы из серии viewport-кадров.
 
-Алгоритм не зависит от диагонали/разрешения монитора: все расчёты идут от
-фактической высоты области захвата (viewport), scrollY и scrollHeight.
+Алгоритм не зависит от диагонали/разрешения монитора и рассчитан на VM/VDI/RDP:
+все расчёты от фактического viewport, scrollY, devicePixelRatio и scrollHeight.
+После каждого scroll метрики перечитываются, screenshot — только после стабилизации.
+Overlap ищется с допуском к сглаживанию, DPI scaling и артефактам сжатия.
 
 Основные функции (API):
   get_page_metrics()          — метрики страницы перед съёмкой
@@ -37,7 +39,7 @@ from pathlib import Path
 from typing import Any, Literal, Sequence
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageFilter
 
 try:
     from playwright.async_api import Page, async_playwright
@@ -45,19 +47,26 @@ except ImportError:  # pragma: no cover - optional dependency
     Page = Any  # type: ignore[misc, assignment]
     async_playwright = None  # type: ignore[assignment]
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 LOG = logging.getLogger("scroll_long_screenshot")
 
 # --- Конфигурация (все доли — без фиксированных px монитора) ----------------
+# Рассчитано на VM / VDI / RDP: метрики перечитываются после каждого scroll,
+# screenshot — только после стабилизации, overlap — с допуском к артефактам.
 
 DEFAULT_SCROLL_STEP_RATIO = 0.72       # scrollStep = viewportHeight * ratio
-DEFAULT_SEARCH_RATIO = 0.35            # нижние/верхние 35% для поиска overlap
-DEFAULT_EXCLUDE_TOP_RATIO = 0.10       # игнор верхних 10% (sticky header)
-DEFAULT_MIN_CONFIDENCE = 0.62          # ниже — fallback
-DEFAULT_SCROLL_SETTLE_MS = 350
+DEFAULT_SEARCH_RATIO = 0.40            # нижние/верхние 40% для поиска overlap
+DEFAULT_EXCLUDE_TOP_RATIO = 0.12       # игнор верхних 12% (sticky header / RDP chrome)
+DEFAULT_MIN_CONFIDENCE = 0.55          # ниже — fallback (мягче для RDP/сжатия)
 DEFAULT_MAX_FRAMES = 500
-DEFAULT_OVERLAP_STEP = 2               # шаг перебора overlap (px в координатах скрина)
+DEFAULT_OVERLAP_STEP = 2               # шаг перебора на полном разрешении
+DEFAULT_COMPARE_WIDTH = 360            # ширина для устойчивого сравнения (не монитор!)
+DEFAULT_BLUR_RADIUS = 1.1              # сглаживание перед сравнением
+DEFAULT_SETTLE_POLL_MS = 90            # опрос scrollY после scroll
+DEFAULT_SETTLE_STABLE_MS = 280         # scrollY должен быть стабилен столько мс
+DEFAULT_SETTLE_MAX_WAIT_MS = 5000      # макс. ожидание стабилизации (RDP медленнее)
+DEFAULT_POST_STABLE_EXTRA_MS = 180     # доп. пауза после стабилизации (рендер VM)
 
 
 @dataclass
@@ -104,12 +113,37 @@ class OverlapData:
 
 
 @dataclass
+class FrameRecord:
+    """Один кадр + фактические метрики в момент съёмки (VM/RDP-safe)."""
+    image: Image.Image
+    metrics: PageMetrics
+    scroll_delta_css: float | None = None  # new_scrollY - old_scrollY после предыдущего кадра
+
+    @property
+    def expected_overlap_px(self) -> int | None:
+        if self.scroll_delta_css is None:
+            return None
+        m = self.metrics
+        overlap_css = m.client_height - self.scroll_delta_css
+        if overlap_css <= 0:
+            return None
+        return max(1, int(round(overlap_css * m.device_pixel_ratio)))
+
+
+@dataclass
 class CaptureState:
     metrics: PageMetrics
-    frames: list[Image.Image] = field(default_factory=list)
-    scroll_positions: list[float] = field(default_factory=list)
+    frames: list[FrameRecord] = field(default_factory=list)
     overlaps: list[OverlapData] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+
+    @property
+    def images(self) -> list[Image.Image]:
+        return [f.image for f in self.frames]
+
+    @property
+    def scroll_positions(self) -> list[float]:
+        return [f.metrics.scroll_y for f in self.frames]
 
 
 @dataclass
@@ -119,6 +153,12 @@ class StitchConfig:
     exclude_top_ratio: float = DEFAULT_EXCLUDE_TOP_RATIO
     min_confidence: float = DEFAULT_MIN_CONFIDENCE
     overlap_step: int = DEFAULT_OVERLAP_STEP
+    compare_width: int = DEFAULT_COMPARE_WIDTH
+    blur_radius: float = DEFAULT_BLUR_RADIUS
+    settle_poll_ms: int = DEFAULT_SETTLE_POLL_MS
+    settle_stable_ms: int = DEFAULT_SETTLE_STABLE_MS
+    settle_max_wait_ms: int = DEFAULT_SETTLE_MAX_WAIT_MS
+    post_stable_extra_ms: int = DEFAULT_POST_STABLE_EXTRA_MS
     hide_fixed_elements: bool = True
 
 
@@ -168,6 +208,36 @@ RESTORE_FIXED_JS = """
 }
 """
 
+# Двойной rAF + fonts.ready — дождаться отрисовки после scroll (важно в RDP/VM)
+STABILIZE_RENDER_JS = """
+async () => {
+  await new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  });
+  if (document.fonts && document.fonts.ready) {
+    try { await document.fonts.ready; } catch (e) {}
+  }
+  const imgs = Array.from(document.images || []);
+  await Promise.all(
+    imgs
+      .filter((img) => {
+        const r = img.getBoundingClientRect();
+        return r.bottom > 0 && r.top < window.innerHeight;
+      })
+      .map((img) => (img.complete ? Promise.resolve() : new Promise((res) => {
+        img.addEventListener('load', res, { once: true });
+        img.addEventListener('error', res, { once: true });
+      })))
+  );
+  return {
+    scrollY: window.scrollY,
+    viewportHeight: window.innerHeight,
+    devicePixelRatio: window.devicePixelRatio || 1,
+    readyState: document.readyState,
+  };
+}
+"""
+
 
 def get_page_metrics(page: Page) -> PageMetrics:
     """Синхронная обёртка: getPageMetrics()."""
@@ -190,31 +260,85 @@ async def async_get_page_metrics(page: Page) -> PageMetrics:
     )
 
 
+async def wait_for_page_stable(
+    page: Page,
+    cfg: StitchConfig,
+    *,
+    previous_scroll_y: float | None = None,
+) -> PageMetrics:
+    """
+    Ждёт стабилизации scrollY и рендера (rAF, fonts, видимые img).
+    Перечитывает viewportHeight / devicePixelRatio / scrollY после каждого опроса.
+    """
+    import time
+
+    deadline = time.monotonic() + cfg.settle_max_wait_ms / 1000.0
+    stable_since: float | None = None
+    last_y: float | None = None
+    metrics = await async_get_page_metrics(page)
+
+    while time.monotonic() < deadline:
+        await page.evaluate(STABILIZE_RENDER_JS)
+        metrics = await async_get_page_metrics(page)
+        y = metrics.scroll_y
+
+        if last_y is not None and abs(y - last_y) < 0.5:
+            if stable_since is None:
+                stable_since = time.monotonic()
+            elif (time.monotonic() - stable_since) * 1000.0 >= cfg.settle_stable_ms:
+                break
+        else:
+            stable_since = None
+        last_y = y
+        await page.wait_for_timeout(cfg.settle_poll_ms)
+
+    if cfg.post_stable_extra_ms > 0:
+        await page.wait_for_timeout(cfg.post_stable_extra_ms)
+        await page.evaluate(STABILIZE_RENDER_JS)
+        metrics = await async_get_page_metrics(page)
+
+    if previous_scroll_y is not None and abs(metrics.scroll_y - previous_scroll_y) < 0.5:
+        LOG.debug(
+            "scrollY stable at %.1f (vh=%d dpr=%.2f)",
+            metrics.scroll_y,
+            metrics.viewport_height,
+            metrics.device_pixel_ratio,
+        )
+    return metrics
+
+
 async def capture_viewport(page: Page) -> Image.Image:
-    """Снимок текущего viewport (не full-page)."""
+    """Снимок текущего viewport (без ожидания — предпочтительно capture_viewport_stable)."""
     png = await page.screenshot(type="png", animations="disabled", caret="hide")
     return Image.open(io.BytesIO(png)).convert("RGB")
+
+
+async def capture_viewport_stable(page: Page, cfg: StitchConfig) -> tuple[Image.Image, PageMetrics]:
+    """Метрики → стабилизация → screenshot. Для VM/RDP."""
+    metrics = await wait_for_page_stable(page, cfg)
+    frame = await capture_viewport(page)
+    return frame, metrics
 
 
 async def scroll_to_next_position(
     page: Page,
     metrics: PageMetrics,
+    cfg: StitchConfig,
     *,
-    scroll_step_ratio: float = DEFAULT_SCROLL_STEP_RATIO,
-    settle_ms: int = DEFAULT_SCROLL_SETTLE_MS,
-) -> tuple[float, float]:
+    scroll_step_ratio: float | None = None,
+) -> tuple[PageMetrics, PageMetrics, float]:
     """
-  Скролл с перекрытием. Возвращает (old_scroll_y, new_scroll_y).
-  scrollStep = viewportHeight * scroll_step_ratio
+    Скролл с перекрытием. Возвращает (metrics_before, metrics_after, scroll_delta_css).
+    scrollStep = фактический viewportHeight * ratio (перечитывается после scroll).
     """
-    old_y = metrics.scroll_y
-    step = metrics.viewport_height * scroll_step_ratio
-    target = min(old_y + step, metrics.max_scroll_y)
+    ratio = scroll_step_ratio if scroll_step_ratio is not None else cfg.scroll_step_ratio
+    before = metrics
+    step = before.viewport_height * ratio
+    target = min(before.scroll_y + step, before.max_scroll_y)
     await page.evaluate("(y) => window.scrollTo(0, y)", target)
-    if settle_ms > 0:
-        await page.wait_for_timeout(settle_ms)
-    new_metrics = await async_get_page_metrics(page)
-    return old_y, new_metrics.scroll_y
+    after = await wait_for_page_stable(page, cfg, previous_scroll_y=before.scroll_y)
+    delta = after.scroll_y - before.scroll_y
+    return before, after, delta
 
 
 async def hide_fixed_elements(page: Page) -> int:
@@ -227,13 +351,26 @@ async def restore_fixed_elements(page: Page) -> int:
 
 # --- Overlap detection (numpy) ------------------------------------------------
 
-def _to_gray_array(img: Image.Image) -> np.ndarray:
-    gray = np.asarray(img.convert("L"), dtype=np.float32)
-    return gray
+def _to_gray_array(img: Image.Image, *, blur_radius: float = 0.0) -> np.ndarray:
+    work = img.convert("L")
+    if blur_radius > 0:
+        work = work.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+    return np.asarray(work, dtype=np.float32)
 
 
-def _row_profile(arr: np.ndarray, block: int = 4) -> np.ndarray:
-    """Усреднение по блокам строк — устойчивее к субпиксельным отличиям."""
+def _resize_for_compare(img: Image.Image, target_width: int) -> Image.Image:
+    """Нормализация ширины — устойчивость к DPI scaling и разной ширине кадра."""
+    w, h = img.size
+    if w <= 0 or h <= 0:
+        return img
+    if w == target_width:
+        return img
+    nh = max(1, int(round(h * target_width / w)))
+    return img.resize((target_width, nh), Image.Resampling.BILINEAR)
+
+
+def _row_profile(arr: np.ndarray, block: int = 6) -> np.ndarray:
+    """Усреднение по блокам строк — устойчивее к субпиксельным отличиям и JPEG."""
     h, w = arr.shape
     usable = (h // block) * block
     if usable < block:
@@ -242,14 +379,57 @@ def _row_profile(arr: np.ndarray, block: int = 4) -> np.ndarray:
     return trimmed.mean(axis=1)
 
 
-def _similarity(a: np.ndarray, b: np.ndarray) -> float:
-    """1.0 = идентично, 0.0 = максимально различно."""
+def _ncc_score(a: np.ndarray, b: np.ndarray) -> float:
+    """Нормализованная корреляция: устойчива к яркостному сдвигу (RDP gamma)."""
     if a.size == 0 or b.size == 0 or a.shape != b.shape:
         return 0.0
-    diff = np.abs(a - b)
-    # Нормализация: средняя разница 0..255 -> confidence
-    mad = float(diff.mean())
-    return max(0.0, 1.0 - mad / 64.0)
+    af = a.reshape(-1).astype(np.float64)
+    bf = b.reshape(-1).astype(np.float64)
+    af -= af.mean()
+    bf -= bf.mean()
+    denom = float(np.sqrt((af * af).sum() * (bf * bf).sum()))
+    if denom < 1e-6:
+        return 0.0
+    return max(0.0, min(1.0, float((af * bf).sum() / denom)))
+
+
+def _mad_score(a: np.ndarray, b: np.ndarray) -> float:
+    if a.size == 0 or b.size == 0 or a.shape != b.shape:
+        return 0.0
+    mad = float(np.abs(a - b).mean())
+    return max(0.0, 1.0 - mad / 72.0)
+
+
+def _similarity(a: np.ndarray, b: np.ndarray) -> float:
+    """Комбинированная метрика: NCC + MAD (допуск к сжатию и сглаживанию)."""
+    return 0.55 * _ncc_score(a, b) + 0.45 * _mad_score(a, b)
+
+
+def _scale_overlap(value_px: int, from_h: int, to_h: int) -> int:
+    if from_h <= 0 or to_h <= 0:
+        return value_px
+    return max(1, int(round(value_px * to_h / from_h)))
+
+
+def _score_overlap_candidate(
+    prev: np.ndarray,
+    curr: np.ndarray,
+    overlap_px: int,
+    exclude_top: int,
+) -> float:
+    h_prev, h_curr = prev.shape[0], curr.shape[0]
+    o = max(8, min(overlap_px, h_prev - 1, h_curr - 1))
+    skip = min(exclude_top, max(0, o - 20))
+    if o - skip < 16:
+        return -1.0
+    prev_cmp = prev[h_prev - o + skip : h_prev, :]
+    curr_cmp = curr[skip:o, :]
+    a = _row_profile(prev_cmp)
+    b = _row_profile(curr_cmp)
+    rows = min(a.shape[0], b.shape[0])
+    if rows < 3:
+        return -1.0
+    return _similarity(a[-rows:, :], b[-rows:, :])
 
 
 def find_overlap(
@@ -261,6 +441,8 @@ def find_overlap(
     exclude_top_ratio: float = DEFAULT_EXCLUDE_TOP_RATIO,
     min_confidence: float = DEFAULT_MIN_CONFIDENCE,
     overlap_step: int = DEFAULT_OVERLAP_STEP,
+    compare_width: int = DEFAULT_COMPARE_WIDTH,
+    blur_radius: float = DEFAULT_BLUR_RADIUS,
 ) -> OverlapData:
     """
     Ищет реальное совпадение между нижней частью previous и верхней частью current.
@@ -269,57 +451,79 @@ def find_overlap(
       previous[h-o:h]  и  current[0:o]
     Верхние exclude_top строк current не участвуют в оценке (sticky header).
     """
-    prev = _to_gray_array(previous_image)
-    curr = _to_gray_array(current_image)
+    h_prev_full, w_prev = previous_image.height, previous_image.width
+    h_curr_full, w_curr = current_image.height, current_image.width
 
-    if prev.shape[1] != curr.shape[1]:
-        msg = f"width mismatch: {prev.shape[1]} vs {curr.shape[1]}"
-        LOG.warning(msg)
-        fb = expected_overlap_px or max(1, int(curr.shape[0] * 0.25))
-        return OverlapData(fb, 0.0, "fallback", float("inf"), msg)
+    if w_prev != w_curr:
+        LOG.info("Frame width differs (%d vs %d) — compare via downscale", w_prev, w_curr)
+
+    prev_cmp_img = _resize_for_compare(previous_image, compare_width)
+    curr_cmp_img = _resize_for_compare(current_image, compare_width)
+    prev = _to_gray_array(prev_cmp_img, blur_radius=blur_radius)
+    curr = _to_gray_array(curr_cmp_img, blur_radius=blur_radius)
 
     h_prev, h_curr = prev.shape[0], curr.shape[0]
     search_limit = max(32, int(min(h_prev, h_curr) * search_ratio))
     exclude_top = max(0, int(h_curr * exclude_top_ratio))
 
-    min_o = max(16, int(search_limit * 0.2))
+    exp_cmp = None
+    if expected_overlap_px is not None:
+        exp_cmp = _scale_overlap(expected_overlap_px, h_curr_full, h_curr)
+
+    min_o = max(12, int(search_limit * 0.15))
     max_o = min(search_limit, h_prev - 1, h_curr - 1)
-    if expected_overlap_px:
-        min_o = max(16, int(expected_overlap_px * 0.5))
-        max_o = min(max_o, int(expected_overlap_px * 1.5))
+    if exp_cmp is not None:
+        min_o = max(12, int(exp_cmp * 0.45))
+        max_o = min(max_o, int(exp_cmp * 1.6))
 
     if max_o <= min_o:
         max_o = min(h_prev, h_curr) - 1
-        min_o = max(16, max_o // 3)
+        min_o = max(12, max_o // 4)
 
-    best_overlap = expected_overlap_px or min_o
+    best_overlap_cmp = exp_cmp or min_o
     best_conf = -1.0
     best_score = float("inf")
     second_conf = -1.0
 
-    for o in range(min_o, max_o + 1, max(1, overlap_step)):
-        prev_strip = prev[h_prev - o : h_prev, :]
-        curr_strip = curr[0:o, :]
-        skip = min(exclude_top, max(0, o - 24))
-        if o - skip < 24:
+    coarse_step = max(3, overlap_step * 2)
+    for o in range(min_o, max_o + 1, coarse_step):
+        conf = _score_overlap_candidate(prev, curr, o, exclude_top)
+        if conf < 0:
             continue
-        prev_cmp = prev_strip[skip:, :]
-        curr_cmp = curr_strip[skip:, :]
-        a = _row_profile(prev_cmp)
-        b = _row_profile(curr_cmp)
-        rows = min(a.shape[0], b.shape[0])
-        if rows < 3:
-            continue
-        conf = _similarity(a[-rows:, :], b[-rows:, :])
-        score = 1.0 - conf
         if conf > best_conf:
             second_conf = best_conf
             best_conf = conf
-            best_score = score
-            best_overlap = o
+            best_score = 1.0 - conf
+            best_overlap_cmp = o
+
+    fine_min = max(min_o, best_overlap_cmp - coarse_step * 2)
+    fine_max = min(max_o, best_overlap_cmp + coarse_step * 2)
+    for o in range(fine_min, fine_max + 1, max(1, overlap_step)):
+        conf = _score_overlap_candidate(prev, curr, o, exclude_top)
+        if conf < 0:
+            continue
+        if conf > best_conf:
+            second_conf = best_conf
+            best_conf = conf
+            best_score = 1.0 - conf
+            best_overlap_cmp = o
+
+    best_overlap = _scale_overlap(best_overlap_cmp, h_curr, h_curr_full)
+    if expected_overlap_px is not None:
+        if best_conf < min_confidence:
+            best_overlap = expected_overlap_px
+        else:
+            drift = abs(best_overlap - expected_overlap_px) / max(expected_overlap_px, 1)
+            if drift > 0.35:
+                LOG.debug(
+                    "overlap drift %.0f%% — trust scroll metrics (%d px)",
+                    drift * 100,
+                    expected_overlap_px,
+                )
+                best_overlap = int(round((best_overlap + expected_overlap_px) / 2))
 
     margin = best_conf - second_conf if second_conf >= 0 else best_conf
-    confident = best_conf >= min_confidence and (margin >= 0.03 or best_conf >= 0.75)
+    confident = best_conf >= min_confidence and (margin >= 0.02 or best_conf >= 0.68)
 
     if confident:
         return OverlapData(
@@ -331,7 +535,7 @@ def find_overlap(
         )
 
     fb = expected_overlap_px if expected_overlap_px else best_overlap
-    fb = max(16, min(fb, h_curr - 1))
+    fb = max(16, min(fb, h_curr_full - 1))
     msg = (
         f"low confidence ({best_conf:.3f}), fallback overlap={fb}px "
         f"(expected={expected_overlap_px})"
@@ -386,6 +590,8 @@ def stitch_images(
                 exclude_top_ratio=cfg.exclude_top_ratio,
                 min_confidence=cfg.min_confidence,
                 overlap_step=cfg.overlap_step,
+                compare_width=cfg.compare_width,
+                blur_radius=cfg.blur_radius,
             )
         parts.append(crop_duplicate_part(curr, od))
     widths = {p.width for p in parts}
@@ -446,30 +652,30 @@ async def _capture_loop(
         LOG.info("Hidden fixed/sticky elements: %d", hidden)
 
     await page.evaluate("window.scrollTo(0, 0)")
-    await page.wait_for_timeout(cfg_scroll_settle_ms(cfg))
-
-    state = CaptureState(metrics=await async_get_page_metrics(page))
-    expected_overlap_px = int(round(
-        state.metrics.viewport_height
-        * (1.0 - cfg.scroll_step_ratio)
-        * state.metrics.device_pixel_ratio
-    ))
+    first_metrics = await wait_for_page_stable(page, cfg)
+    state = CaptureState(metrics=first_metrics)
 
     prev_scroll_y = -1.0
     for frame_idx in range(max_frames):
-        metrics = await async_get_page_metrics(page)
+        frame, metrics = await capture_viewport_stable(page, cfg)
         state.metrics = metrics
-        state.scroll_positions.append(metrics.scroll_y)
+        scroll_delta = None
+        if state.frames:
+            scroll_delta = metrics.scroll_y - state.frames[-1].metrics.scroll_y
 
-        frame = await capture_viewport(page)
-        state.frames.append(frame)
+        record = FrameRecord(image=frame, metrics=metrics, scroll_delta_css=scroll_delta)
+        state.frames.append(record)
+
         LOG.info(
-            "Frame %d: scrollY=%.0f / %.0f, shot=%dx%d",
+            "Frame %d: scrollY=%.0f/%.0f vh=%d dpr=%.2f shot=%dx%d delta=%s",
             frame_idx + 1,
             metrics.scroll_y,
             metrics.max_scroll_y,
+            metrics.viewport_height,
+            metrics.device_pixel_ratio,
             frame.width,
             frame.height,
+            f"{scroll_delta:.0f}" if scroll_delta is not None else "—",
         )
 
         at_bottom = metrics.scroll_y >= metrics.max_scroll_y - 0.5
@@ -477,34 +683,39 @@ async def _capture_loop(
             LOG.info("Reached bottom at scrollY=%.0f", metrics.scroll_y)
             break
 
-        _, new_scroll_y = await scroll_to_next_position(
-            page,
-            metrics,
-            scroll_step_ratio=cfg.scroll_step_ratio,
-            settle_ms=cfg_scroll_settle_ms(cfg),
-        )
+        before, after, delta = await scroll_to_next_position(page, metrics, cfg)
 
-        if abs(new_scroll_y - metrics.scroll_y) < 0.5:
-            LOG.warning("scrollY unchanged (%.0f) — stopping", new_scroll_y)
-            state.warnings.append(f"scroll stalled at y={new_scroll_y:.0f}")
+        if abs(delta) < 0.5:
+            LOG.warning("scrollY unchanged (%.0f) — stopping", after.scroll_y)
+            state.warnings.append(f"scroll stalled at y={after.scroll_y:.0f}")
             break
 
-        if abs(new_scroll_y - prev_scroll_y) < 0.5 and frame_idx > 0:
+        if abs(after.scroll_y - prev_scroll_y) < 0.5 and frame_idx > 0:
             LOG.warning("scrollY repeated — infinite loop guard")
             state.warnings.append("infinite loop guard triggered")
             break
-        prev_scroll_y = new_scroll_y
+        prev_scroll_y = after.scroll_y
 
-    # Overlap между соседними кадрами
     for i in range(1, len(state.frames)):
+        prev_rec = state.frames[i - 1]
+        curr_rec = state.frames[i]
+        expected = curr_rec.expected_overlap_px
+        if expected is None and prev_rec.metrics.viewport_height:
+            expected = int(round(
+                prev_rec.metrics.client_height
+                * (1.0 - cfg.scroll_step_ratio)
+                * curr_rec.metrics.device_pixel_ratio
+            ))
         od = find_overlap(
-            state.frames[i - 1],
-            state.frames[i],
-            expected_overlap_px=expected_overlap_px,
+            prev_rec.image,
+            curr_rec.image,
+            expected_overlap_px=expected,
             search_ratio=cfg.search_ratio,
             exclude_top_ratio=cfg.exclude_top_ratio,
             min_confidence=cfg.min_confidence,
             overlap_step=cfg.overlap_step,
+            compare_width=cfg.compare_width,
+            blur_radius=cfg.blur_radius,
         )
         state.overlaps.append(od)
         if od.method == "fallback":
@@ -514,10 +725,6 @@ async def _capture_loop(
         await restore_fixed_elements(page)
 
     return state
-
-
-def cfg_scroll_settle_ms(cfg: StitchConfig) -> int:
-    return DEFAULT_SCROLL_SETTLE_MS
 
 
 async def capture_long_screenshot(
@@ -553,16 +760,7 @@ async def capture_long_screenshot(
         state = await _capture_loop(page, cfg, max_frames=max_frames)
         await browser.close()
 
-    stitched = stitch_images(
-        state.frames,
-        overlaps=state.overlaps,
-        config=cfg,
-        expected_overlap_px=int(round(
-            state.metrics.viewport_height
-            * (1.0 - cfg.scroll_step_ratio)
-            * state.metrics.device_pixel_ratio
-        )),
-    )
+    stitched = stitch_images(state.images, overlaps=state.overlaps, config=cfg)
     last_y = state.scroll_positions[-1] if state.scroll_positions else 0.0
     final = finalize_long_screenshot(stitched, state.metrics, last_scroll_y=last_y)
     final.save(output, format="PNG", optimize=True)
@@ -618,6 +816,8 @@ def stitch_folder(
                 exclude_top_ratio=cfg.exclude_top_ratio,
                 min_confidence=cfg.min_confidence,
                 overlap_step=cfg.overlap_step,
+                compare_width=cfg.compare_width,
+                blur_radius=cfg.blur_radius,
             )
         )
 
@@ -719,8 +919,9 @@ def main(argv: list[str] | None = None) -> int:
 
 # Публичные алиасы в стиле camelCase (для совместимости с ТЗ) -----------------
 getPageMetrics = async_get_page_metrics
-captureViewport = capture_viewport
+captureViewport = capture_viewport_stable
 scrollToNextPosition = scroll_to_next_position
+waitForPageStable = wait_for_page_stable
 findOverlap = find_overlap
 cropDuplicatePart = crop_duplicate_part
 stitchImages = stitch_images

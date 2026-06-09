@@ -47,9 +47,10 @@ python scroll_long_screenshot.py stitch captures\ -o docs\page.png
 python scroll_long_screenshot.py overlap frame1.png frame2.png
 ```
 
-Склейка не зависит от диагонали/масштаба: расчёт от `viewportHeight`, `scrollY`,
-`scrollHeight` и анализа совпадения нижней части предыдущего кадра с верхней частью
-текущего.
+Склейка не зависит от диагонали/масштаба и рассчитана на **VM / VDI / RDP**:
+- после каждого scroll перечитываются `scrollY`, `viewportHeight`, `devicePixelRatio`
+- screenshot только после стабилизации (rAF, fonts, видимые img)
+- overlap: NCC + MAD, blur, downscale — устойчивость к сжатию и gamma RDP
 
 ## Поведение
 
