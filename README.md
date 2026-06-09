@@ -33,6 +33,24 @@ python run_docling_parse_v3.1.3.py
 
 Форматы: [FORMATS.md](FORMATS.md)
 
+## Длинный скриншот страницы (склейка)
+
+Файл `scroll_long_screenshot.py` — надёжная склейка серии viewport-кадров с поиском
+реального overlap (не фиксированные 25%).
+
+```bat
+pip install numpy Pillow playwright
+playwright install chromium
+
+python scroll_long_screenshot.py capture https://example.com -o docs/page.png
+python scroll_long_screenshot.py stitch captures\ -o docs\page.png
+python scroll_long_screenshot.py overlap frame1.png frame2.png
+```
+
+Склейка не зависит от диагонали/масштаба: расчёт от `viewportHeight`, `scrollY`,
+`scrollHeight` и анализа совпадения нижней части предыдущего кадра с верхней частью
+текущего.
+
 ## Поведение
 
 - Scroll-скриншоты — нарезка по высоте, прогресс `tile 1/30`
