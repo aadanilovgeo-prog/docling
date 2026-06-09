@@ -7,13 +7,13 @@
 | Реализация | Файл | Запуск |
 |------------|------|--------|
 | **BAT v1.5** | `run_docling_parse_v1.5.bat` | Двойной щелчок (свой `cmd /k`) |
-| **C v3.0** | `run_docling_parse.exe` | Двойной щелчок **без BAT** |
+| **C v3.0** | `run_docling_parse_v3.0.exe` | Двойной щелчок **без BAT** |
 
 Обе делают одно: `docs\` → `parsed\` (md + html). BAT — полный CMD-скрипт; exe — минимальный лаунчер.
 
 ---
 
-## C: `run_docling_parse.exe` (v3.0)
+## C: `run_docling_parse_v3.0.exe`
 
 Минимальный батч-раннер: сканирует `docs\`, вызывает `python -m docling`, пишет `.md` + `.html` в `parsed\`.
 
@@ -21,8 +21,8 @@
 
 | Способ | Ссылка |
 |--------|--------|
-| **Файл в репозитории** | [dist/run_docling_parse.exe](dist/run_docling_parse.exe) |
-| **Прямая ссылка** | https://github.com/aadanilovgeo-prog/docling/raw/main/dist/run_docling_parse.exe |
+| **Файл в репозитории** | [dist/run_docling_parse_v3.0.exe](dist/run_docling_parse_v3.0.exe) |
+| **Прямая ссылка** | https://github.com/aadanilovgeo-prog/docling/raw/main/dist/run_docling_parse_v3.0.exe |
 | **Release** | https://github.com/aadanilovgeo-prog/docling/releases/tag/latest-build |
 
 Сборка на каждый push в `main` (изменения `src/`): GitHub Actions → [Build Windows EXE](.github/workflows/build-exe.yml).

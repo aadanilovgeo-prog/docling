@@ -19,6 +19,7 @@
 #include <time.h>
 
 #define VERSION           L"3.0.0"
+#define EXE_NAME          L"run_docling_parse_v3.0.exe"
 #define MAX_PATH_W        4096
 #define MAX_CMD           32768
 #define MAX_KEY           1024
@@ -429,7 +430,7 @@ static int parse_args(int argc, wchar_t **argv)
 {
     for (int i = 1; i < argc; i++) {
         if (ieq(argv[i], L"--help") || ieq(argv[i], L"-h") || ieq(argv[i], L"/?")) {
-            wprintf(L"run_docling_parse.exe v%ls\n\n", VERSION);
+            wprintf(L"%ls v%ls\n\n", EXE_NAME, VERSION);
             wprintf(L"  docs\\ -> parsed\\  (md + html)\n\n");
             wprintf(L"  DOCLING_ROOT          project folder (default: exe dir)\n");
             wprintf(L"  DOCLING_PYTHON        path to python.exe\n");

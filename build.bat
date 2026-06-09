@@ -2,7 +2,7 @@
 setlocal EnableExtensions
 cd /d "%~dp0"
 
-set "OUT=run_docling_parse.exe"
+set "OUT=run_docling_parse_v3.0.exe"
 set "SRC=src\run_docling_parse.c"
 
 echo Building %OUT% ...
