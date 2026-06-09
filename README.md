@@ -15,13 +15,25 @@
 
 ## C: `run_docling_parse.exe` (автономный)
 
-**Не требует BAT.** Соберите один раз, положите exe в папку проекта и запускайте двойным щелчком.
+**Не требует BAT.** Скачайте готовый exe или соберите сами.
+
+### Скачать (всегда актуальная сборка с main)
+
+| Способ | Ссылка |
+|--------|--------|
+| **Файл в репозитории** | [dist/run_docling_parse.exe](dist/run_docling_parse.exe) |
+| **Прямая ссылка** | https://github.com/aadanilovgeo-prog/docling/raw/main/dist/run_docling_parse.exe |
+| **Release** | https://github.com/aadanilovgeo-prog/docling/releases/tag/latest-build |
+
+Сборка на каждый push в `main` (изменения `src/`): GitHub Actions → [Build Windows EXE](.github/workflows/build-exe.yml).
+
+### Собрать локально
 
 ```bat
 build.bat
 ```
 
-Сборка: MSVC `cl` или MinGW `gcc` (см. `build.bat`).
+MSVC `cl` или MinGW `gcc` (см. `build.bat`).
 
 ### Поведение exe
 

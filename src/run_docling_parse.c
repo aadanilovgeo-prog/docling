@@ -15,6 +15,7 @@
 #include <stdarg.h>
 #include <wchar.h>
 #include <time.h>
+#include <locale.h>
 
 #define VERSION L"2.0.0"
 #define MAX_PATH_W 4096
