@@ -1,4 +1,4 @@
-# Поддерживаемые форматы (Python v2.0.8)
+# Поддерживаемые форматы (Python v3.0.0)
 
 | Gruppa | Rasshireniya | Docling `--from` | Osobennosti |
 |--------|-------------|------------------|-------------|
@@ -11,15 +11,6 @@
 | JSON | json | json_docling | |
 | XML | xml | auto | uspto / jats / xbrl |
 
-**Vyhod:** tolko `parsed\<klyuch>.md` i `parsed\<klyuch>.html`
+**Vyhod:** `parsed\<klyuch>.md` i `parsed\<klyuch>.html`
 
 **OUT_KEY:** `docs\file.pdf` → `file`; `docs\sub\file.pdf` → `sub_file`
-
-**Work copy:** `work\job_<N>_<random>.ext` → rename v `<klyuch>.md/html`
-
-## Dopolnitelno
-
-```bat
-pip install docling
-pip install "docling[asr]"
-```

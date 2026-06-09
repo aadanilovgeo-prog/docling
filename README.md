@@ -1,6 +1,6 @@
 # docling
 
-**Версия: 2.0.8** · ветка `main`
+**Версия: 3.0.0** · ветка `main`
 
 Пакетная обработка документов через [Docling CLI](https://docling-project.github.io/docling/).
 
@@ -8,7 +8,7 @@
 
 ```bat
 pip install -r requirements.txt
-python run_docling_parse_v2.0.8.py
+python run_docling_parse_v3.0.0.py
 ```
 
 Двойной щелчок по `.py` (если Python ассоциирован с файлами) — окно останется открытым до Enter.
@@ -23,43 +23,35 @@ python run_docling_parse_v2.0.8.py
 | `PILLOW_MAX_IMAGE_PIXELS` | Лимит Pillow для больших PNG (по умолчанию `9999999999`) |
 | `DOCLING_PYTHON` | Python с docling (напр. `...\miniconda3\python.exe`) |
 | `--python PATH` | То же через аргумент |
-| `DOCLING_PILLOW_MAX_PIXELS` | Лимит Pillow (приоритетнее `PILLOW_MAX_IMAGE_PIXELS`) |
-| `DOCLING_OCR_MAX_SIDE` | Макс. сторона изображения для OCR (по умолчанию `8192`) |
+| `DOCLING_OCR_MAX_SIDE` | Макс. высота/ширина фрагмента OCR (по умолчанию `8192`) |
 
-Скрипт ищет `miniconda3\python.exe` рядом с `Scripts\docling.exe` и запускает `_docling_runner.py` (не `docling.exe` — иначе PILLOW не работает).
-
-Если docling установлен в miniconda, а скрипт запускается другим Python:
+Скрипт ищет `miniconda3\python.exe` и запускает `_docling_runner.py` (не `docling.exe`).
 
 ```bat
 set DOCLING_PYTHON=%LOCALAPPDATA%\miniconda3\python.exe
-python run_docling_parse_v2.0.8.py
+python run_docling_parse_v3.0.0.py
 ```
 
-По умолчанию **ROOT** = папка со скриптом.
+## Структура проекта
 
----
-
-## Структура папок
-
-| Папка | Назначение |
-|-------|------------|
-| `docs` | Вход, рекурсивно |
-| `parsed` | `.md` + `.html` |
-| `logs` | Логи |
-| `work` | Рабочие копии (`job_*`) |
+| Путь | Назначение |
+|------|------------|
+| `run_docling_parse_v3.0.0.py` | Точка входа |
+| `docling_batch/` | Модули парсера |
+| `docs/` | Входные файлы |
+| `parsed/` | `.md` + `.html` |
+| `logs/` | Логи |
+| `work/` | Рабочие копии и тайлы |
 
 Форматы: [FORMATS.md](FORMATS.md)
 
-## Поведение (v2.0.8)
+## Поведение (v3.0.0)
 
 - Рекурсивный обход `docs\`
-- Пропуск готовых пар `.md` + `.html` **с непустым содержимым**
+- Пропуск готовых пар `.md` + `.html` с непустым содержимым
+- Длинные scroll-скриншоты — нарезка по высоте (ширина сохраняется)
 - 3 попытки; для PDF — OCR только на 1-й
-- Длинные scroll-скриншоты — **нарезка по высоте** (ширина сохраняется), не сжатие в «полоску»
-- Обычные большие фото — уменьшение перед OCR (8192 → 4096 → 2048 px)
-- Пустой вывод считается ошибкой (перепарсинг)
-- Work copy в `work\job_<N>_<random>.ext`
-- Лог: `logs\docling_YYYYMMDD_HHMMSS_*.log`
+- Прогресс тайлов в консоли: `tile 1/30`
 
 ## Docling
 
@@ -68,4 +60,4 @@ pip install docling
 pip install "docling[asr]"
 ```
 
-Для видео — **ffmpeg** в PATH. Закройте файлы в Office перед парсингом.
+Для видео — **ffmpeg** в PATH.
