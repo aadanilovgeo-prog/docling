@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Docling batch parser v2.0.5 — Python port of BAT v1.6 logic.
+Docling batch parser v2.0.6 — Python port of BAT v1.6 logic.
 
 docs/  ->  parsed/  (.md + .html)
 """
@@ -13,8 +13,10 @@ import os
 os.environ.setdefault("PILLOW_MAX_IMAGE_PIXELS", "9999999999")
 
 import argparse
+import re
 import random
 import shutil
+import struct
 import subprocess
 import sys
 import time
@@ -23,10 +25,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
-VERSION = "2.0.5"
+VERSION = "2.0.6"
 
 _runtime: "DoclingRuntime | None" = None
 DEFAULT_PILLOW = "9999999999"
+DEFAULT_OCR_MAX_PIXELS = 50_000_000
+DEFAULT_OCR_MAX_SIDE = 8192
+OCR_MAX_SIDES = (8192, 4096, 2048)
+MIN_OUTPUT_CHARS = 32
 MAX_ATTEMPTS = 3
 RETRY_DELAY_SEC = 5
 
@@ -156,6 +162,27 @@ def output_complete(parsed: Path, key: str) -> bool:
     return (parsed / f"{key}.md").is_file() and (parsed / f"{key}.html").is_file()
 
 
+def output_has_content(parsed: Path, key: str, min_chars: int = MIN_OUTPUT_CHARS) -> bool:
+    md_path = parsed / f"{key}.md"
+    html_path = parsed / f"{key}.html"
+    if not md_path.is_file() or not html_path.is_file():
+        return False
+    try:
+        md_text = md_path.read_text(encoding="utf-8", errors="replace").strip()
+        html_text = html_path.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return False
+    if len(md_text) >= min_chars:
+        return True
+    html_plain = re.sub(r"<[^>]+>", " ", html_text)
+    html_plain = re.sub(r"\s+", " ", html_plain).strip()
+    return len(html_plain) >= min_chars
+
+
+def output_valid(parsed: Path, key: str) -> bool:
+    return output_complete(parsed, key) and output_has_content(parsed, key)
+
+
 def cleanup_artifacts(parsed: Path, key: str) -> None:
     if not key:
         return
@@ -216,6 +243,89 @@ def apply_pillow_limit() -> None:
         Image.MAX_IMAGE_PIXELS = int(val)
     except (ImportError, ValueError, OverflowError):
         pass
+
+
+def ocr_max_pixels() -> int:
+    raw = os.environ.get("DOCLING_OCR_MAX_PIXELS")
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return DEFAULT_OCR_MAX_PIXELS
+
+
+def ocr_max_side_for_attempt(attempt: int) -> int:
+    idx = min(attempt - 1, len(OCR_MAX_SIDES) - 1)
+    raw = os.environ.get("DOCLING_OCR_MAX_SIDE")
+    if raw and attempt == 1:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return OCR_MAX_SIDES[idx]
+
+
+def image_size(path: Path) -> tuple[int, int] | None:
+    """Read dimensions without full decode when possible (PNG IHDR)."""
+    try:
+        if path.suffix.lower() == ".png":
+            with path.open("rb") as f:
+                if f.read(8) == b"\x89PNG\r\n\x1a\n":
+                    while True:
+                        header = f.read(8)
+                        if len(header) < 8:
+                            break
+                        length, ctype = struct.unpack(">I4s", header)
+                        data = f.read(length)
+                        f.read(4)
+                        if ctype == b"IHDR" and len(data) >= 8:
+                            return struct.unpack(">II", data[:8])
+        apply_pillow_limit()
+        from PIL import Image
+
+        with Image.open(path) as img:
+            return img.size
+    except OSError:
+        return None
+
+
+def image_pixel_count(path: Path) -> int | None:
+    size = image_size(path)
+    if not size:
+        return None
+    w, h = size
+    return w * h
+
+
+def prepare_ocr_image(app: App, src: Path, job_id: str, attempt: int, max_side: int) -> tuple[Path, Path | None]:
+    """Downscale huge images so OCR can run; returns (input_path, temp_path_or_none)."""
+    size = image_size(src)
+    if not size:
+        return src, None
+    w, h = size
+    if max(w, h) <= max_side:
+        return src, None
+
+    scale = max_side / max(w, h)
+    new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
+    dest = app.work / f"{job_id}_ocr_a{attempt}.png"
+    apply_pillow_limit()
+    from PIL import Image
+
+    with Image.open(src) as img:
+        resized = img.resize(new_size, Image.Resampling.LANCZOS)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        resized.save(dest, format="PNG", optimize=True)
+    log_append(
+        app,
+        f"OCR downscale: {src.name} {w}x{h} -> {new_size[0]}x{new_size[1]} ({dest.name})",
+    )
+    return dest, dest
+
+
+def docling_runner_path() -> Path:
+    return Path(__file__).resolve().parent / "_docling_runner.py"
 
 
 def _subprocess_flags() -> int:
@@ -388,7 +498,8 @@ def build_docling_args(
     spec: FormatSpec,
     use_ocr: bool,
 ) -> list[str]:
-    return [
+    image_mode = "embedded" if spec.kind == "image" else "placeholder"
+    args = [
         "--to", "md",
         "--to", "html",
         "--output", str(app.parsed),
@@ -397,9 +508,12 @@ def build_docling_args(
         *spec.pdf,
         "--ocr" if use_ocr else "--no-ocr",
         *spec.tables,
-        "--image-export-mode", "placeholder",
+        "--image-export-mode", image_mode,
         "-v", str(src),
     ]
+    if spec.kind == "image" and use_ocr:
+        args.append("--force-ocr")
+    return args
 
 
 def _write_log_output(app: App, output: str) -> None:
@@ -464,7 +578,8 @@ def run_docling_subprocess_cmd(cmd: list[str], app: App) -> tuple[int, str]:
 
 
 def build_subprocess_cmd(runtime: DoclingRuntime, args: list[str]) -> list[str]:
-    return [str(runtime.python), "-u", "-m", "docling.cli.main", *args]
+    runner = docling_runner_path()
+    return [str(runtime.python), "-u", str(runner), *args]
 
 
 def run_docling(args: list[str], app: App) -> tuple[int, str]:
@@ -488,6 +603,7 @@ def run_docling(args: list[str], app: App) -> tuple[int, str]:
 def conversion_failed(output: str) -> bool:
     markers = (
         "DecompressionBombError",
+        "ResizeImgError",
         "failed to convert",
         "is not valid",
         "Could not load image",
@@ -502,13 +618,25 @@ def run_with_retry(app: App, src: Path, job_id: str, out_key: str, ext: str) -> 
     if spec.kind == "unknown":
         return False
 
+    if spec.kind == "image":
+        size = image_size(src)
+        if size:
+            w, h = size
+            log_append(app, f"Image size: {w}x{h} ({w * h} px)")
+
     for attempt in range(1, MAX_ATTEMPTS + 1):
         cleanup_artifacts(app.parsed, job_id)
         cleanup_artifacts(app.parsed, out_key)
 
         use_ocr = spec.ocr_first
-        if attempt >= 2 and spec.kind in ("pdf", "image"):
+        if attempt >= 2 and spec.kind == "pdf":
             use_ocr = False
+
+        docling_src = src
+        scaled_tmp: Path | None = None
+        if spec.kind == "image" and use_ocr:
+            max_side = ocr_max_side_for_attempt(attempt)
+            docling_src, scaled_tmp = prepare_ocr_image(app, src, job_id, attempt, max_side)
 
         log_append(
             app,
@@ -517,17 +645,24 @@ def run_with_retry(app: App, src: Path, job_id: str, out_key: str, ext: str) -> 
         ocr_tag = ", OCR" if use_ocr else ""
         say(f"  -> attempt {attempt}/{MAX_ATTEMPTS} ({spec.kind}{ocr_tag})")
 
-        code, out = run_docling(build_docling_args(app, src, spec, use_ocr), app)
+        code, out = run_docling(build_docling_args(app, docling_src, spec, use_ocr), app)
+        if scaled_tmp and scaled_tmp.is_file():
+            scaled_tmp.unlink(missing_ok=True)
+
         if conversion_failed(out):
             log_append(app, "WARN: docling reported conversion failure in output")
         if code == 0 and not conversion_failed(out):
-            if output_complete(app.parsed, job_id):
+            if output_valid(app.parsed, job_id):
                 rename_job_outputs(app.parsed, job_id, out_key)
-                if output_complete(app.parsed, out_key):
+                if output_valid(app.parsed, out_key):
                     remove_unwanted(app.parsed, job_id)
                     remove_unwanted(app.parsed, out_key)
                     return True
-            log_append(app, f"WARN: docling ok but missing output for {out_key}")
+                log_append(app, f"WARN: empty output after rename for {out_key}")
+            elif output_complete(app.parsed, job_id):
+                log_append(app, f"WARN: docling ok but output empty for {job_id}")
+            else:
+                log_append(app, f"WARN: docling ok but missing output for {out_key}")
 
         if attempt < MAX_ATTEMPTS:
             log_append(app, f"Retry in {RETRY_DELAY_SEC} s...")
@@ -569,11 +704,14 @@ def handle_file(app: App, src: Path) -> None:
     if not key:
         return
 
-    if output_complete(app.parsed, key):
+    if output_valid(app.parsed, key):
         app.stats.skipped += 1
         say(f"[SKIP] {src.name}")
         log_append(app, f"[SKIP] {src}")
         return
+    if output_complete(app.parsed, key) and not output_has_content(app.parsed, key):
+        log_append(app, f"[REPARSE] empty output for {key}, removing stale files")
+        cleanup_artifacts(app.parsed, key)
 
     say(f"[PARSE] {src.name}")
     log_append(app, f"[PARSE] {src} key={key}")
@@ -678,7 +816,7 @@ def main() -> int:
         say("  pip install docling   (v tom zhe Python chto zapuskaet skript)")
         say("  ili:")
         say("  set DOCLING_PYTHON=C:\\Users\\andrey.danilov\\AppData\\Local\\miniconda3\\python.exe")
-        say("  python run_docling_parse_v2.0.5.py --python C:\\...\\miniconda3\\python.exe")
+        say("  python run_docling_parse_v2.0.6.py --python C:\\...\\miniconda3\\python.exe")
         log_append(app, "ERROR: docling not found")
         for doc in find_docling_exe_paths():
             log_append(app, f"  found docling.exe: {doc}")
