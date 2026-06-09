@@ -294,6 +294,7 @@ REM ======================== OSNOVNOJ KOD ========================
 set "SCRIPT_VERSION=1.5"
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
+if not defined PILLOW_MAX_IMAGE_PIXELS set "PILLOW_MAX_IMAGE_PIXELS=1000000000"
 
 set "ROOT_DIR=C:\Users\andrey.danilov\Documents\VTB\docling"
 set "INPUT_DIR=%ROOT_DIR%\docs"

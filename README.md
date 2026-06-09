@@ -48,6 +48,7 @@ MSVC `cl` или MinGW `gcc` (см. `build.bat`).
 - Потоковый лог (растёт во время работы Docling)
 - Прогресс пакета `[ 33%] 2/6`
 - `--document-timeout` 7200 с (`DOCLING_TIMEOUT`, `0` = без лимита)
+- `PILLOW_MAX_IMAGE_PIXELS=1000000000` — большие PNG (scroll capture), обход DecompressionBombError
 - Unicode `CopyFileW`, work copy `job_*`
 
 Исходник: `src/run_docling_parse.c`

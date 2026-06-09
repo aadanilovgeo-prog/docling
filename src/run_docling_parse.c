@@ -17,7 +17,8 @@
 #include <time.h>
 #include <locale.h>
 
-#define VERSION L"2.0.0"
+#define VERSION L"2.0.1"
+#define DEFAULT_PILLOW_MAX_PIXELS L"1000000000"
 #define MAX_PATH_W 4096
 #define MAX_KEY 1024
 #define MAX_EXT 32
@@ -746,8 +747,15 @@ static void setup_console(void)
 
 static void setup_environment(void)
 {
+    const wchar_t *pillow_max = _wgetenv(L"PILLOW_MAX_IMAGE_PIXELS");
+    if (!pillow_max || !pillow_max[0])
+        pillow_max = _wgetenv(L"DOCLING_PILLOW_MAX_PIXELS");
+    if (!pillow_max || !pillow_max[0])
+        pillow_max = DEFAULT_PILLOW_MAX_PIXELS;
+
     SetEnvironmentVariableW(L"PYTHONUTF8", L"1");
     SetEnvironmentVariableW(L"PYTHONIOENCODING", L"utf-8");
+    SetEnvironmentVariableW(L"PILLOW_MAX_IMAGE_PIXELS", pillow_max);
     SetEnvironmentVariableW(L"TEMP", g_cfg.tmp);
     SetEnvironmentVariableW(L"TMP", g_cfg.tmp);
     _wsetlocale(LC_ALL, L"");
@@ -780,7 +788,8 @@ static int parse_args(int argc, wchar_t **argv)
             wprintf(L"  --no-pause, -n     ne zhdat Enter v konce (dlya avtomatizacii)\n");
             wprintf(L"  DOCLING_ROOT       kornevaya papka (docs, parsed, logs, work)\n");
             wprintf(L"  DOCLING_TIMEOUT    tajmaut dokumenta v sekundah (0 = bez limita)\n");
-            wprintf(L"  DOCLING_NO_PAUSE=1 to zhe chto --no-pause\n\n");
+            wprintf(L"  DOCLING_NO_PAUSE=1 to zhe chto --no-pause\n");
+            wprintf(L"  PILLOW_MAX_IMAGE_PIXELS  limit Pillow dlya bolshih PNG (def. 1e9)\n\n");
             wprintf(L"Po umolchaniju ROOT = papka s exe, inache DOCLING_ROOT.\n");
             return 0;
         }
