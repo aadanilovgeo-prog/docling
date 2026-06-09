@@ -17,8 +17,8 @@
 #include <time.h>
 #include <locale.h>
 
-#define VERSION L"2.0.1"
-#define DEFAULT_PILLOW_MAX_PIXELS L"1000000000"
+#define VERSION L"2.0.2"
+#define DEFAULT_PILLOW_MAX_PIXELS L"2000000000"
 #define MAX_PATH_W 4096
 #define MAX_KEY 1024
 #define MAX_EXT 32
@@ -474,6 +474,19 @@ static int build_docling_cmd(wchar_t *cmd, size_t cap, const wchar_t *src,
 /* Run docling; stream stdout/stderr to log in real time. Returns process exit code. */
 static int run_docling_process(const wchar_t *cmdline)
 {
+    wchar_t wrapped[MAX_CMD + 512];
+    const wchar_t *pillow = _wgetenv(L"PILLOW_MAX_IMAGE_PIXELS");
+    if (!pillow || !pillow[0]) pillow = DEFAULT_PILLOW_MAX_PIXELS;
+
+    int wn = swprintf(wrapped, MAX_CMD + 512,
+        L"cmd.exe /c set PILLOW_MAX_IMAGE_PIXELS=%s& set PYTHONUTF8=1& "
+        L"set PYTHONIOENCODING=utf-8& %s",
+        pillow, cmdline);
+    if (wn <= 0 || wn >= MAX_CMD + 512) {
+        append_log(L"ERROR: wrapped command too long");
+        return -1;
+    }
+
     SECURITY_ATTRIBUTES sa;
     sa.nLength = sizeof(sa);
     sa.bInheritHandle = TRUE;
@@ -495,7 +508,7 @@ static int run_docling_process(const wchar_t *cmdline)
     si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
     si.wShowWindow = SW_HIDE;
 
-    wchar_t *mutable_cmd = _wcsdup(cmdline);
+    wchar_t *mutable_cmd = _wcsdup(wrapped);
     if (!mutable_cmd) {
         CloseHandle(read_pipe);
         CloseHandle(write_pipe);
@@ -504,7 +517,7 @@ static int run_docling_process(const wchar_t *cmdline)
 
     BOOL ok = CreateProcessW(
         NULL, mutable_cmd, NULL, NULL, TRUE,
-        CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
+        CREATE_NO_WINDOW,
         NULL, NULL, &si, &pi);
 
     CloseHandle(write_pipe);
@@ -878,6 +891,9 @@ int wmain(int argc, wchar_t **argv)
 
     append_log(L"Started v%ls", VERSION);
     append_log(L"Docling: %s", g_cfg.docling_exe);
+    append_log(L"PILLOW_MAX_IMAGE_PIXELS=%s",
+               _wgetenv(L"PILLOW_MAX_IMAGE_PIXELS") ? _wgetenv(L"PILLOW_MAX_IMAGE_PIXELS")
+                                                   : DEFAULT_PILLOW_MAX_PIXELS);
     if (g_cfg.doc_timeout_sec > 0)
         append_log(L"Document timeout: %d sec", g_cfg.doc_timeout_sec);
 

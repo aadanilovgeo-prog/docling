@@ -291,10 +291,10 @@ exit /b 0
 REM ======================== OSNOVNOJ KOD ========================
 :MainStart
 
-set "SCRIPT_VERSION=1.5"
+set "SCRIPT_VERSION=1.6"
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
-if not defined PILLOW_MAX_IMAGE_PIXELS set "PILLOW_MAX_IMAGE_PIXELS=1000000000"
+if not defined PILLOW_MAX_IMAGE_PIXELS set "PILLOW_MAX_IMAGE_PIXELS=2000000000"
 
 set "ROOT_DIR=C:\Users\andrey.danilov\Documents\VTB\docling"
 set "INPUT_DIR=%ROOT_DIR%\docs"
@@ -336,6 +336,7 @@ set "LOG_FILE=%LOG_DIR%\docling_%LOG_STAMP%.log"
 type nul > "%LOG_FILE%" 2>nul
 
 call :AppendLog "Started v!SCRIPT_VERSION!"
+call :AppendLog "PILLOW_MAX_IMAGE_PIXELS=!PILLOW_MAX_IMAGE_PIXELS!"
 
 where docling >nul 2>&1
 if errorlevel 1 (
