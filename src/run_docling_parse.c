@@ -75,6 +75,8 @@ typedef struct {
 
 static Config g_cfg;
 static FILE *g_log = NULL;
+static int g_no_pause = 0;
+static wchar_t g_exe_dir[MAX_PATH_W];
 
 /* -------------------------------------------------------------------------- */
 static void wcsncpy0(wchar_t *dst, const wchar_t *src, size_t n)
@@ -705,6 +707,42 @@ static void handle_one_file(const FileEntry *fe)
     remove_unwanted_outputs(out_key);
 }
 
+static void get_exe_directory(wchar_t *dir, size_t cap)
+{
+    wchar_t path[MAX_PATH_W];
+    DWORD n = GetModuleFileNameW(NULL, path, MAX_PATH_W);
+    if (n == 0 || n >= MAX_PATH_W) {
+        dir[0] = L'\0';
+        return;
+    }
+    wchar_t *slash = wcsrchr(path, L'\\');
+    if (!slash) slash = wcsrchr(path, L'/');
+    if (slash) *slash = L'\0';
+    wcsncpy0(dir, path, cap);
+}
+
+static void setup_console(void)
+{
+    if (!GetConsoleWindow()) {
+        if (!AttachConsole(ATTACH_PARENT_PROCESS))
+            AllocConsole();
+#if defined(_MSC_VER)
+        FILE *fp;
+        freopen_s(&fp, "CONOUT$", "w", stdout);
+        freopen_s(&fp, "CONOUT$", "w", stderr);
+        freopen_s(&fp, "CONIN$", "r", stdin);
+#else
+        freopen("CONOUT$", "w", stdout);
+        freopen("CONOUT$", "w", stderr);
+        freopen("CONIN$", "r", stdin);
+#endif
+    }
+
+    SetConsoleTitleW(L"Docling batch parse v2.0");
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+}
+
 static void setup_environment(void)
 {
     SetEnvironmentVariableW(L"PYTHONUTF8", L"1");
@@ -712,8 +750,41 @@ static void setup_environment(void)
     SetEnvironmentVariableW(L"TEMP", g_cfg.tmp);
     SetEnvironmentVariableW(L"TMP", g_cfg.tmp);
     _wsetlocale(LC_ALL, L"");
-    SetConsoleOutputCP(CP_UTF8);
-    SetConsoleCP(CP_UTF8);
+}
+
+static void wait_before_exit(void)
+{
+    if (g_no_pause) return;
+    if (_wgetenv(L"DOCLING_NO_PAUSE")) return;
+
+    HANDLE hin = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD mode = 0;
+    if (hin == INVALID_HANDLE_VALUE || !GetConsoleMode(hin, &mode))
+        return;
+
+    print_line(L"");
+    print_line(L"Gotovo. Nazhmite Enter dlya zakrytiya...");
+    fflush(stdout);
+    int ch;
+    while ((ch = getwchar()) != L'\n' && ch != WEOF) { }
+}
+
+static int parse_args(int argc, wchar_t **argv)
+{
+    for (int i = 1; i < argc; i++) {
+        if (wcsieq(argv[i], L"--no-pause") || wcsieq(argv[i], L"-n"))
+            g_no_pause = 1;
+        else if (wcsieq(argv[i], L"--help") || wcsieq(argv[i], L"-h") || wcsieq(argv[i], L"/?")) {
+            wprintf(L"run_docling_parse.exe  — paketnyj parsing Docling (md+html)\n\n");
+            wprintf(L"  --no-pause, -n     ne zhdat Enter v konce (dlya avtomatizacii)\n");
+            wprintf(L"  DOCLING_ROOT       kornevaya papka (docs, parsed, logs, work)\n");
+            wprintf(L"  DOCLING_TIMEOUT    tajmaut dokumenta v sekundah (0 = bez limita)\n");
+            wprintf(L"  DOCLING_NO_PAUSE=1 to zhe chto --no-pause\n\n");
+            wprintf(L"Po umolchaniju ROOT = papka s exe, inache DOCLING_ROOT.\n");
+            return 0;
+        }
+    }
+    return 1;
 }
 
 static int load_config(void)
@@ -723,9 +794,13 @@ static int load_config(void)
     g_cfg.retry_delay_sec = RETRY_DELAY_SEC;
     g_cfg.doc_timeout_sec = DEFAULT_DOC_TIMEOUT_SEC;
 
+    get_exe_directory(g_exe_dir, MAX_PATH_W);
+
     const wchar_t *root_env = _wgetenv(L"DOCLING_ROOT");
     if (root_env && root_env[0])
         wcsncpy0(g_cfg.root, root_env, MAX_PATH_W);
+    else if (g_exe_dir[0])
+        wcsncpy0(g_cfg.root, g_exe_dir, MAX_PATH_W);
     else
         wcsncpy0(g_cfg.root, L"C:\\Users\\andrey.danilov\\Documents\\VTB\\docling", MAX_PATH_W);
 
@@ -749,8 +824,10 @@ static int load_config(void)
 
 int wmain(int argc, wchar_t **argv)
 {
-    (void)argc;
-    (void)argv;
+    setup_console();
+
+    if (!parse_args(argc, argv))
+        return 0;
 
     srand((unsigned)time(NULL) ^ (unsigned)GetTickCount64());
     load_config();
@@ -759,18 +836,21 @@ int wmain(int argc, wchar_t **argv)
     print_line(L"========================================");
     wprintf(L"Docling batch parse - v%ls (C)\n", VERSION);
     print_line(L"========================================");
+    wprintf(L"Exe:   %s\n", g_exe_dir);
     wprintf(L"Root:  %s\n", g_cfg.root);
     print_line(L"Vyhod: md + html");
     print_line(L"========================================");
 
     if (!find_docling(g_cfg.docling_exe, MAX_PATH_W)) {
         print_line(L"OSHIBKA: docling ne v PATH. pip install docling");
+        wait_before_exit();
         return 1;
     }
 
     if (!dir_exists(g_cfg.input)) {
         print_line(L"OSHIBKA: net papki docs");
         wprintf(L"%s\n", g_cfg.input);
+        wait_before_exit();
         return 1;
     }
 
@@ -826,7 +906,6 @@ int wmain(int argc, wchar_t **argv)
 
     if (g_log) fclose(g_log);
 
-    print_line(L"");
-    print_line(L"Gotovo. V cmd vvedite exit dlya zakrytiya");
+    wait_before_exit();
     return g_cfg.errors > 0 ? 1 : 0;
 }

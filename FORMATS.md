@@ -1,4 +1,4 @@
-# Поддерживаемые форматы (run_docling_parse v2.0)
+# Поддерживаемые форматы (BAT v1.5 / C exe v2.0)
 
 | Gruppa | Rasshireniya | Docling `--from` | Osobennosti |
 |--------|-------------|------------------|-------------|
@@ -22,5 +22,6 @@
 ```bat
 pip install docling
 pip install "docling[asr]"
-build.bat
 ```
+
+C: `build.bat` → `run_docling_parse.exe` (запуск без BAT).
