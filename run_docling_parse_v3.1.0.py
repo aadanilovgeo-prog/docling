@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Docling batch parser v3.0.0 — single-file runner.
+Docling batch parser v3.1.0 — single-file runner.
 
 docs/  ->  parsed/  (.md + .html)
 """
@@ -27,7 +27,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Iterator, Literal
 
-VERSION = "3.0.0"
+VERSION = "3.1.0"
 
 DEFAULT_PILLOW = "9999999999"
 DEFAULT_OCR_MAX_PIXELS = 50_000_000
