@@ -2,7 +2,7 @@
 setlocal EnableExtensions EnableDelayedExpansion
 
 if /i not "%~1"=="RUN" (
-    title Docling batch v1.5
+    title Docling batch v1.6
     cmd /k call "%~f0" RUN
     exit /b 0
 )
