@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Docling batch parser v2.0.2 — Python port of BAT v1.6 logic.
+Docling batch parser v2.0.3 — Python port of BAT v1.6 logic.
 
 docs/  ->  parsed/  (.md + .html)
 """
@@ -23,7 +23,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
-VERSION = "2.0.2"
+VERSION = "2.0.3"
+
+_runtime: "DoclingRuntime | None" = None
 DEFAULT_PILLOW = "9999999999"
 MAX_ATTEMPTS = 3
 RETRY_DELAY_SEC = 5
@@ -46,6 +48,13 @@ class FormatSpec:
     pdf: list[str] = field(default_factory=list)
     tables: list[str] = field(default_factory=lambda: ["--no-tables"])
     ocr_first: bool = False
+
+
+@dataclass
+class DoclingRuntime:
+    mode: str  # inprocess | subprocess
+    python: Path
+    label: str
 
 
 @dataclass
@@ -209,6 +218,65 @@ def apply_pillow_limit() -> None:
         pass
 
 
+def python_has_docling(py: Path) -> bool:
+    try:
+        proc = subprocess.run(
+            [str(py), "-c", "import docling"],
+            capture_output=True,
+            timeout=60,
+        )
+        return proc.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def python_beside_docling_exe() -> Path | None:
+    doc = shutil.which("docling")
+    if not doc:
+        return None
+    py = Path(doc).parent / "python.exe"
+    return py if py.is_file() else None
+
+
+def resolve_docling_runtime() -> DoclingRuntime | None:
+    """Find Python with docling (miniconda Scripts\\python.exe, DOCLING_PYTHON, …)."""
+    global _runtime
+    if _runtime is not None:
+        return _runtime
+
+    candidates: list[Path] = []
+    env_py = os.environ.get("DOCLING_PYTHON")
+    if env_py:
+        candidates.append(Path(env_py))
+
+    candidates.append(Path(sys.executable))
+
+    beside = python_beside_docling_exe()
+    if beside:
+        candidates.append(beside)
+
+    seen: set[str] = set()
+    for py in candidates:
+        key = str(py.resolve()) if py.exists() else str(py)
+        if key in seen or not py.is_file():
+            continue
+        seen.add(key)
+        if not python_has_docling(py):
+            continue
+        if py.resolve() == Path(sys.executable).resolve():
+            _runtime = DoclingRuntime("inprocess", py, f"in-process ({py})")
+        else:
+            _runtime = DoclingRuntime("subprocess", py, f"subprocess ({py})")
+        return _runtime
+
+    doc = shutil.which("docling")
+    if doc and Path(doc).is_file():
+        _runtime = DoclingRuntime("subprocess", Path(doc), f"docling.exe ({doc})")
+        return _runtime
+
+    return None
+
+
 def child_env(app: App) -> dict[str, str]:
     env = os.environ.copy()
     env["PILLOW_MAX_IMAGE_PIXELS"] = pillow_limit()
@@ -282,47 +350,47 @@ def run_docling_inprocess(args: list[str], app: App) -> tuple[int, str]:
     return code, output
 
 
-def run_docling_subprocess(args: list[str], app: App) -> tuple[int, str]:
-    """Fallback: python -m docling.cli.main or docling.exe."""
-    bases: list[list[str]] = [[sys.executable, "-u", "-m", "docling.cli.main"]]
-    exe = shutil.which("docling")
-    if exe:
-        bases.append([exe])
+def run_docling_subprocess_cmd(cmd: list[str], app: App) -> tuple[int, str]:
+    log_append(app, "CMD " + " ".join(f'"{c}"' if " " in c else c for c in cmd))
+    proc = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        cwd=str(app.root),
+        env=child_env(app),
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    out = proc.stdout or ""
+    _write_log_output(app, out)
+    log_append(app, f"EXIT {proc.returncode}")
+    return proc.returncode, out
 
-    last_out = ""
-    for base in bases:
-        cmd = [*base, *args]
-        log_append(app, "CMD " + " ".join(f'"{c}"' if " " in c else c for c in cmd))
-        proc = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            cwd=str(app.root),
-            env=child_env(app),
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        out = proc.stdout or ""
-        _write_log_output(app, out)
-        last_out = out
-        log_append(app, f"EXIT {proc.returncode}")
-        if proc.returncode == 0 or "No module named" not in out:
-            return proc.returncode, out
-    return 1, last_out
+
+def build_subprocess_cmd(runtime: DoclingRuntime, args: list[str]) -> list[str]:
+    py_name = runtime.python.name.lower()
+    if py_name in ("docling.exe", "docling"):
+        return [str(runtime.python), *args]
+    return [str(runtime.python), "-u", "-m", "docling.cli.main", *args]
 
 
 def run_docling(args: list[str], app: App) -> tuple[int, str]:
+    runtime = resolve_docling_runtime()
+    if runtime is None:
+        return 1, "ERROR: docling runtime not resolved"
+
     log_append(app, "CMD docling " + " ".join(f'"{a}"' if " " in a else a for a in args))
     log_append(app, f"PILLOW_MAX_IMAGE_PIXELS={pillow_limit()}")
-    log_append(app, f"Mode: in-process ({sys.executable})")
-    try:
+    log_append(app, f"Mode: {runtime.label}")
+
+    if runtime.mode == "inprocess":
         code, out = run_docling_inprocess(args, app)
         log_append(app, f"EXIT {code}")
         return code, out
-    except ImportError as exc:
-        log_append(app, f"WARN: in-process failed ({exc}), subprocess fallback")
-        return run_docling_subprocess(args, app)
+
+    cmd = build_subprocess_cmd(runtime, args)
+    return run_docling_subprocess_cmd(cmd, app)
 
 
 def conversion_failed(output: str) -> bool:
@@ -454,11 +522,7 @@ def setup_env(app: App) -> None:
 
 
 def check_docling() -> bool:
-    try:
-        import docling  # noqa: F401
-        return True
-    except ImportError:
-        return bool(shutil.which("docling"))
+    return resolve_docling_runtime() is not None
 
 
 def parse_args() -> argparse.Namespace:
@@ -505,14 +569,20 @@ def main() -> int:
 
     log_append(app, f"Started v{VERSION}")
     log_append(app, f"PILLOW_MAX_IMAGE_PIXELS={pillow_limit()}")
-    log_append(app, f"Python: {sys.executable}")
+    log_append(app, f"Script Python: {sys.executable}")
 
-    if not check_docling():
-        say("OSHIBKA: docling ne ustanovlen. pip install docling")
+    runtime = resolve_docling_runtime()
+    if runtime is None:
+        say("OSHIBKA: docling ne naiden.")
+        say("  Ustanovite: pip install docling")
+        say("  Ili ukazhite: set DOCLING_PYTHON=C:\\path\\to\\python.exe")
         log_append(app, "ERROR: docling not found")
         if args.pause:
             input("Enter...")
         return 1
+
+    say(f"Docling: {runtime.label}")
+    log_append(app, f"Docling runtime: {runtime.label}")
 
     say(f"Input:   {app.docs}")
     say(f"Output:  {app.parsed}")
