@@ -294,7 +294,7 @@ REM ======================== OSNOVNOJ KOD ========================
 set "SCRIPT_VERSION=1.6"
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
-if not defined PILLOW_MAX_IMAGE_PIXELS set "PILLOW_MAX_IMAGE_PIXELS=2000000000"
+if not defined PILLOW_MAX_IMAGE_PIXELS set "PILLOW_MAX_IMAGE_PIXELS=9999999999"
 
 set "ROOT_DIR=C:\Users\andrey.danilov\Documents\VTB\docling"
 set "INPUT_DIR=%ROOT_DIR%\docs"
@@ -323,10 +323,15 @@ call :PrintLine "========================================"
 
 chcp 65001 >nul 2>&1
 
-call :EnsureDir "%OUTPUT_DIR%"
-call :EnsureDir "%LOG_DIR%"
+call :PrintLine "Proverka papok..."
 call :EnsureDir "%WORK_DIR%"
 call :EnsureDir "%TMP_DIR%"
+call :EnsureDir "%INPUT_DIR%"
+call :EnsureDir "%OUTPUT_DIR%"
+call :EnsureDir "%LOG_DIR%"
+call :PrintLine "  docs, parsed, logs, work - OK"
+call :PrintLine ""
+
 set "TEMP=%TMP_DIR%"
 set "TMP=%TMP_DIR%"
 
@@ -341,12 +346,6 @@ call :AppendLog "PILLOW_MAX_IMAGE_PIXELS=!PILLOW_MAX_IMAGE_PIXELS!"
 where docling >nul 2>&1
 if errorlevel 1 (
     call :PrintLine "OSHIBKA: docling ne v PATH. pip install docling"
-    goto :EndScript
-)
-
-if not exist "%INPUT_DIR%" (
-    call :PrintLine "OSHIBKA: net papki docs"
-    call :PrintLine "%INPUT_DIR%"
     goto :EndScript
 )
 

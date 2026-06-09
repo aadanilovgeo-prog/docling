@@ -17,8 +17,8 @@
 #include <time.h>
 #include <locale.h>
 
-#define VERSION L"2.0.2"
-#define DEFAULT_PILLOW_MAX_PIXELS L"2000000000"
+#define VERSION L"2.0.3"
+#define DEFAULT_PILLOW_MAX_PIXELS L"9999999999"
 #define MAX_PATH_W 4096
 #define MAX_KEY 1024
 #define MAX_EXT 32
@@ -157,6 +157,45 @@ static void print_line(const wchar_t *s)
 static void print_status(const wchar_t *tag, const wchar_t *name)
 {
     wprintf(L"%ls %ls\n", tag, name);
+}
+
+static const wchar_t *get_pillow_max(void)
+{
+    const wchar_t *pillow = _wgetenv(L"PILLOW_MAX_IMAGE_PIXELS");
+    if (!pillow || !pillow[0])
+        pillow = _wgetenv(L"DOCLING_PILLOW_MAX_PIXELS");
+    if (!pillow || !pillow[0])
+        pillow = DEFAULT_PILLOW_MAX_PIXELS;
+    return pillow;
+}
+
+/* Create docs, parsed, logs, work, work\tmp if missing. */
+static int ensure_project_dirs(void)
+{
+    const wchar_t *paths[5];
+    const wchar_t *labels[5];
+    paths[0] = g_cfg.work;
+    labels[0] = L"work";
+    paths[1] = g_cfg.tmp;
+    labels[1] = L"work\\tmp";
+    paths[2] = g_cfg.input;
+    labels[2] = L"docs";
+    paths[3] = g_cfg.output;
+    labels[3] = L"parsed";
+    paths[4] = g_cfg.log_dir;
+    labels[4] = L"logs";
+
+    print_line(L"Proverka papok...");
+    for (int i = 0; i < 5; i++) {
+        int had = dir_exists(paths[i]);
+        if (!ensure_dir(paths[i])) {
+            wprintf(L"  [FAIL] %s  %s\n", labels[i], paths[i]);
+            return 0;
+        }
+        wprintf(L"  [%s] %s\n", had ? L"OK  " : L"NEW ", paths[i]);
+    }
+    print_line(L"");
+    return 1;
 }
 
 static void make_log_timestamp(wchar_t *stamp, size_t cap)
@@ -471,18 +510,44 @@ static int build_docling_cmd(wchar_t *cmd, size_t cap, const wchar_t *src,
     return n > 0 && (size_t)n < cap;
 }
 
+/* Launcher .cmd sets PILLOW before Python imports Pillow (large PNG scroll captures). */
+static int write_launcher_cmd(const wchar_t *cmdline, wchar_t *batch_path, size_t batch_cap)
+{
+    unsigned id = (unsigned)(GetTickCount64() & 0xffffffffu) ^ (unsigned)rand();
+    swprintf(batch_path, batch_cap, L"%s\\docling_launch_%u.cmd", g_cfg.tmp, id);
+
+    const wchar_t *pillow = get_pillow_max();
+    FILE *f = _wfopen(batch_path, L"w, ccs=UTF-8");
+    if (!f) f = _wfopen(batch_path, L"w");
+    if (!f) return 0;
+
+    fwprintf(f, L"@echo off\r\n");
+    fwprintf(f, L"set PILLOW_MAX_IMAGE_PIXELS=%s\r\n", pillow);
+    fwprintf(f, L"set PYTHONUTF8=1\r\n");
+    fwprintf(f, L"set PYTHONIOENCODING=utf-8\r\n");
+    fwprintf(f, L"set TEMP=%s\r\n", g_cfg.tmp);
+    fwprintf(f, L"set TMP=%s\r\n", g_cfg.tmp);
+    fwprintf(f, L"%s\r\n", cmdline);
+    fwprintf(f, L"exit /b %%ERRORLEVEL%%\r\n");
+    fclose(f);
+    append_log(L"Launcher: %s PILLOW=%s", batch_path, pillow);
+    return 1;
+}
+
 /* Run docling; stream stdout/stderr to log in real time. Returns process exit code. */
 static int run_docling_process(const wchar_t *cmdline)
 {
-    wchar_t wrapped[MAX_CMD + 512];
-    const wchar_t *pillow = _wgetenv(L"PILLOW_MAX_IMAGE_PIXELS");
-    if (!pillow || !pillow[0]) pillow = DEFAULT_PILLOW_MAX_PIXELS;
+    wchar_t batch[MAX_PATH_W];
+    wchar_t wrapped[MAX_PATH_W + 64];
 
-    int wn = swprintf(wrapped, MAX_CMD + 512,
-        L"cmd.exe /c set PILLOW_MAX_IMAGE_PIXELS=%s& set PYTHONUTF8=1& "
-        L"set PYTHONIOENCODING=utf-8& %s",
-        pillow, cmdline);
-    if (wn <= 0 || wn >= MAX_CMD + 512) {
+    if (!write_launcher_cmd(cmdline, batch, MAX_PATH_W)) {
+        append_log(L"ERROR: cannot write launcher cmd");
+        return -1;
+    }
+
+    int wn = swprintf(wrapped, MAX_PATH_W + 64, L"cmd.exe /c \"\"%s\"\"", batch);
+    if (wn <= 0 || wn >= MAX_PATH_W + 64) {
+        DeleteFileW(batch);
         append_log(L"ERROR: wrapped command too long");
         return -1;
     }
@@ -543,6 +608,7 @@ static int run_docling_process(const wchar_t *cmdline)
     GetExitCodeProcess(pi.hProcess, &exit_code);
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
+    DeleteFileW(batch);
     return (int)exit_code;
 }
 
@@ -760,15 +826,9 @@ static void setup_console(void)
 
 static void setup_environment(void)
 {
-    const wchar_t *pillow_max = _wgetenv(L"PILLOW_MAX_IMAGE_PIXELS");
-    if (!pillow_max || !pillow_max[0])
-        pillow_max = _wgetenv(L"DOCLING_PILLOW_MAX_PIXELS");
-    if (!pillow_max || !pillow_max[0])
-        pillow_max = DEFAULT_PILLOW_MAX_PIXELS;
-
     SetEnvironmentVariableW(L"PYTHONUTF8", L"1");
     SetEnvironmentVariableW(L"PYTHONIOENCODING", L"utf-8");
-    SetEnvironmentVariableW(L"PILLOW_MAX_IMAGE_PIXELS", pillow_max);
+    SetEnvironmentVariableW(L"PILLOW_MAX_IMAGE_PIXELS", get_pillow_max());
     SetEnvironmentVariableW(L"TEMP", g_cfg.tmp);
     SetEnvironmentVariableW(L"TMP", g_cfg.tmp);
     _wsetlocale(LC_ALL, L"");
@@ -802,7 +862,7 @@ static int parse_args(int argc, wchar_t **argv)
             wprintf(L"  DOCLING_ROOT       kornevaya papka (docs, parsed, logs, work)\n");
             wprintf(L"  DOCLING_TIMEOUT    tajmaut dokumenta v sekundah (0 = bez limita)\n");
             wprintf(L"  DOCLING_NO_PAUSE=1 to zhe chto --no-pause\n");
-            wprintf(L"  PILLOW_MAX_IMAGE_PIXELS  limit Pillow dlya bolshih PNG (def. 1e9)\n\n");
+            wprintf(L"  PILLOW_MAX_IMAGE_PIXELS  0 = bez limita (def.), ili chislo pikselej\n\n");
             wprintf(L"Po umolchaniju ROOT = papka s exe, inache DOCLING_ROOT.\n");
             return 0;
         }
@@ -854,7 +914,6 @@ int wmain(int argc, wchar_t **argv)
 
     srand((unsigned)time(NULL) ^ (unsigned)GetTickCount64());
     load_config();
-    setup_environment();
 
     print_line(L"========================================");
     wprintf(L"Docling batch parse - v%ls (C)\n", VERSION);
@@ -864,23 +923,19 @@ int wmain(int argc, wchar_t **argv)
     print_line(L"Vyhod: md + html");
     print_line(L"========================================");
 
+    if (!ensure_project_dirs()) {
+        print_line(L"OSHIBKA: ne udalos sozdat papki proekta");
+        wait_before_exit();
+        return 1;
+    }
+
+    setup_environment();
+
     if (!find_docling(g_cfg.docling_exe, MAX_PATH_W)) {
         print_line(L"OSHIBKA: docling ne v PATH. pip install docling");
         wait_before_exit();
         return 1;
     }
-
-    if (!dir_exists(g_cfg.input)) {
-        print_line(L"OSHIBKA: net papki docs");
-        wprintf(L"%s\n", g_cfg.input);
-        wait_before_exit();
-        return 1;
-    }
-
-    ensure_dir(g_cfg.output);
-    ensure_dir(g_cfg.log_dir);
-    ensure_dir(g_cfg.work);
-    ensure_dir(g_cfg.tmp);
 
     wchar_t stamp[64];
     make_log_timestamp(stamp, 64);
@@ -891,9 +946,7 @@ int wmain(int argc, wchar_t **argv)
 
     append_log(L"Started v%ls", VERSION);
     append_log(L"Docling: %s", g_cfg.docling_exe);
-    append_log(L"PILLOW_MAX_IMAGE_PIXELS=%s",
-               _wgetenv(L"PILLOW_MAX_IMAGE_PIXELS") ? _wgetenv(L"PILLOW_MAX_IMAGE_PIXELS")
-                                                   : DEFAULT_PILLOW_MAX_PIXELS);
+    append_log(L"PILLOW_MAX_IMAGE_PIXELS=%s", get_pillow_max());
     if (g_cfg.doc_timeout_sec > 0)
         append_log(L"Document timeout: %d sec", g_cfg.doc_timeout_sec);
 
