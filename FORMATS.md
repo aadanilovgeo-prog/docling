@@ -1,11 +1,11 @@
-# Поддерживаемые форматы (Python v2.0.6)
+# Поддерживаемые форматы (Python v2.0.7)
 
 | Gruppa | Rasshireniya | Docling `--from` | Osobennosti |
 |--------|-------------|------------------|-------------|
 | PDF | pdf | pdf | pypdfium2, OCR na 1-j popytke |
 | Office | docx, xlsx, pptx | docx / xlsx / pptx | bez OCR, tablicy |
 | Tekst | md, markdown, adoc, asciidoc, tex, html, htm, xhtml, csv, vtt | md / asciidoc / latex / html / csv / vtt | bez OCR |
-| Izobrazheniya | png, jpg, jpeg, tif, tiff, bmp, webp | image | OCR + downscale dlya bolshih skrinov |
+| Izobrazheniya | png, jpg, jpeg, tif, tiff, bmp, webp | image | OCR; scroll — narezka po vysote |
 | Audio | wav, mp3, m4a, aac, ogg, flac | audio | `--pipeline asr` |
 | Video | mp4, avi, mov | audio + ASR | nuzhen ffmpeg |
 | JSON | json | json_docling | |

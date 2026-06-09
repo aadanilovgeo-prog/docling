@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Docling batch parser v2.0.6 — Python port of BAT v1.6 logic.
+Docling batch parser v2.0.7 — Python port of BAT v1.6 logic.
 
 docs/  ->  parsed/  (.md + .html)
 """
@@ -25,14 +25,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
-VERSION = "2.0.6"
+VERSION = "2.0.7"
 
 _runtime: "DoclingRuntime | None" = None
 DEFAULT_PILLOW = "9999999999"
 DEFAULT_OCR_MAX_PIXELS = 50_000_000
 DEFAULT_OCR_MAX_SIDE = 8192
 OCR_MAX_SIDES = (8192, 4096, 2048)
+MIN_OCR_SIDE = 32
 MIN_OUTPUT_CHARS = 32
+MIN_TILE_CHARS = 4
 MAX_ATTEMPTS = 3
 RETRY_DELAY_SEC = 5
 
@@ -191,6 +193,16 @@ def cleanup_artifacts(parsed: Path, key: str) -> None:
     shutil.rmtree(parsed / key, ignore_errors=True)
 
 
+def cleanup_job_artifacts(parsed: Path, job_id: str, out_key: str) -> None:
+    cleanup_artifacts(parsed, job_id)
+    cleanup_artifacts(parsed, out_key)
+    for path in list(parsed.glob(f"{job_id}_*")):
+        if path.is_file() and path.suffix in (".md", ".html", ".json", ".txt"):
+            path.unlink(missing_ok=True)
+        elif path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+
+
 def remove_unwanted(parsed: Path, key: str) -> None:
     if not key:
         return
@@ -298,30 +310,172 @@ def image_pixel_count(path: Path) -> int | None:
     return w * h
 
 
-def prepare_ocr_image(app: App, src: Path, job_id: str, attempt: int, max_side: int) -> tuple[Path, Path | None]:
-    """Downscale huge images so OCR can run; returns (input_path, temp_path_or_none)."""
-    size = image_size(src)
-    if not size:
-        return src, None
-    w, h = size
-    if max(w, h) <= max_side:
-        return src, None
+def _save_png_tile(img, dest: Path) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    img.save(dest, format="PNG", optimize=True)
 
+
+def split_image_vertical(
+    app: App,
+    src: Path,
+    job_id: str,
+    attempt: int,
+    tile_height: int,
+) -> tuple[list[Path], list[Path]]:
+    """Split tall scroll captures into horizontal strips (full width preserved)."""
+    apply_pillow_limit()
+    from PIL import Image
+
+    tiles: list[Path] = []
+    temps: list[Path] = []
+    with Image.open(src) as img:
+        w, h = img.size
+        y = 0
+        idx = 0
+        while y < h:
+            y_end = min(y + tile_height, h)
+            tile = img.crop((0, y, w, y_end))
+            dest = app.work / f"{job_id}_a{attempt}_t{idx:03d}.png"
+            _save_png_tile(tile, dest)
+            tiles.append(dest)
+            temps.append(dest)
+            log_append(app, f"OCR tile {idx}: {w}x{y_end - y} ({dest.name})")
+            y = y_end
+            idx += 1
+    log_append(
+        app,
+        f"OCR split vertical: {src.name} {w}x{h} -> {len(tiles)} tiles (h<={tile_height})",
+    )
+    return tiles, temps
+
+
+def split_image_horizontal(
+    app: App,
+    src: Path,
+    job_id: str,
+    attempt: int,
+    tile_width: int,
+) -> tuple[list[Path], list[Path]]:
+    """Split very wide panoramas into vertical strips (full height preserved)."""
+    apply_pillow_limit()
+    from PIL import Image
+
+    tiles: list[Path] = []
+    temps: list[Path] = []
+    with Image.open(src) as img:
+        w, h = img.size
+        x = 0
+        idx = 0
+        while x < w:
+            x_end = min(x + tile_width, w)
+            tile = img.crop((x, 0, x_end, h))
+            dest = app.work / f"{job_id}_a{attempt}_t{idx:03d}.png"
+            _save_png_tile(tile, dest)
+            tiles.append(dest)
+            temps.append(dest)
+            log_append(app, f"OCR tile {idx}: {x_end - x}x{h} ({dest.name})")
+            x = x_end
+            idx += 1
+    log_append(
+        app,
+        f"OCR split horizontal: {src.name} {w}x{h} -> {len(tiles)} tiles (w<={tile_width})",
+    )
+    return tiles, temps
+
+
+def downscale_uniform(
+    app: App,
+    src: Path,
+    job_id: str,
+    attempt: int,
+    max_side: int,
+) -> tuple[Path, Path]:
+    size = image_size(src)
+    assert size is not None
+    w, h = size
     scale = max_side / max(w, h)
-    new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
-    dest = app.work / f"{job_id}_ocr_a{attempt}.png"
+    new_w = max(MIN_OCR_SIDE, int(w * scale))
+    new_h = max(MIN_OCR_SIDE, int(h * scale))
+    dest = app.work / f"{job_id}_a{attempt}_scaled.png"
     apply_pillow_limit()
     from PIL import Image
 
     with Image.open(src) as img:
-        resized = img.resize(new_size, Image.Resampling.LANCZOS)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        resized.save(dest, format="PNG", optimize=True)
+        resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        _save_png_tile(resized, dest)
     log_append(
         app,
-        f"OCR downscale: {src.name} {w}x{h} -> {new_size[0]}x{new_size[1]} ({dest.name})",
+        f"OCR downscale: {src.name} {w}x{h} -> {new_w}x{new_h} ({dest.name})",
     )
     return dest, dest
+
+
+def prepare_ocr_inputs(
+    app: App,
+    src: Path,
+    job_id: str,
+    attempt: int,
+    max_side: int,
+) -> tuple[list[Path], list[Path]]:
+    """Prepare one or more images for OCR (split scroll captures, else downscale)."""
+    size = image_size(src)
+    if not size:
+        return [src], []
+    w, h = size
+    if max(w, h) <= max_side and w * h <= ocr_max_pixels():
+        return [src], []
+
+    # Tall scroll capture: split by height, keep width (e.g. 1631x241035)
+    if h > max_side and w <= max_side:
+        return split_image_vertical(app, src, job_id, attempt, max_side)
+
+    # Wide panorama: split by width, keep height
+    if w > max_side and h <= max_side:
+        return split_image_horizontal(app, src, job_id, attempt, max_side)
+
+    dest, temp = downscale_uniform(app, src, job_id, attempt, max_side)
+    return [dest], [temp]
+
+
+def merge_parsed_outputs(app: App, stems: list[str], out_key: str) -> bool:
+    """Merge per-tile md/html into final output files."""
+    md_parts: list[str] = []
+    html_parts: list[str] = []
+    for stem in stems:
+        md_path = app.parsed / f"{stem}.md"
+        html_path = app.parsed / f"{stem}.html"
+        if md_path.is_file():
+            text = md_path.read_text(encoding="utf-8", errors="replace").strip()
+            if text:
+                md_parts.append(text)
+        if html_path.is_file():
+            text = html_path.read_text(encoding="utf-8", errors="replace").strip()
+            if text:
+                html_parts.append(text)
+
+    if not md_parts and not html_parts:
+        return False
+
+    md_out = app.parsed / f"{out_key}.md"
+    html_out = app.parsed / f"{out_key}.html"
+    md_out.write_text("\n\n---\n\n".join(md_parts), encoding="utf-8")
+
+    if html_parts:
+        body = "\n<hr/>\n".join(html_parts)
+        if not re.search(r"<html\b", body, re.I):
+            body = f"<!DOCTYPE html>\n<html><body>\n{body}\n</body></html>"
+        html_out.write_text(body, encoding="utf-8")
+    else:
+        html_out.write_text(
+            "<!DOCTYPE html>\n<html><body></body></html>",
+            encoding="utf-8",
+        )
+
+    for stem in stems:
+        if stem != out_key:
+            cleanup_artifacts(app.parsed, stem)
+
+    return output_valid(app.parsed, out_key)
 
 
 def docling_runner_path() -> Path:
@@ -625,51 +779,73 @@ def run_with_retry(app: App, src: Path, job_id: str, out_key: str, ext: str) -> 
             log_append(app, f"Image size: {w}x{h} ({w * h} px)")
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
-        cleanup_artifacts(app.parsed, job_id)
-        cleanup_artifacts(app.parsed, out_key)
+        cleanup_job_artifacts(app.parsed, job_id, out_key)
 
         use_ocr = spec.ocr_first
         if attempt >= 2 and spec.kind == "pdf":
             use_ocr = False
 
-        docling_src = src
-        scaled_tmp: Path | None = None
+        ocr_inputs: list[Path] = [src]
+        ocr_temps: list[Path] = []
         if spec.kind == "image" and use_ocr:
             max_side = ocr_max_side_for_attempt(attempt)
-            docling_src, scaled_tmp = prepare_ocr_image(app, src, job_id, attempt, max_side)
+            ocr_inputs, ocr_temps = prepare_ocr_inputs(app, src, job_id, attempt, max_side)
 
         log_append(
             app,
-            f"Attempt {attempt}/{MAX_ATTEMPTS} {spec.kind} job={job_id} out={out_key} ocr={'yes' if use_ocr else 'no'}",
+            f"Attempt {attempt}/{MAX_ATTEMPTS} {spec.kind} job={job_id} out={out_key} "
+            f"ocr={'yes' if use_ocr else 'no'} tiles={len(ocr_inputs)}",
         )
         ocr_tag = ", OCR" if use_ocr else ""
-        say(f"  -> attempt {attempt}/{MAX_ATTEMPTS} ({spec.kind}{ocr_tag})")
+        tile_tag = f", {len(ocr_inputs)} tiles" if len(ocr_inputs) > 1 else ""
+        say(f"  -> attempt {attempt}/{MAX_ATTEMPTS} ({spec.kind}{ocr_tag}{tile_tag})")
 
-        code, out = run_docling(build_docling_args(app, docling_src, spec, use_ocr), app)
-        if scaled_tmp and scaled_tmp.is_file():
-            scaled_tmp.unlink(missing_ok=True)
+        stems_ok: list[str] = []
+        attempt_failed = False
+        try:
+            for idx, tile_path in enumerate(ocr_inputs):
+                if len(ocr_inputs) > 1:
+                    say(f"     tile {idx + 1}/{len(ocr_inputs)}")
+                code, out = run_docling(build_docling_args(app, tile_path, spec, use_ocr), app)
+                stem = tile_path.stem
+                if conversion_failed(out) or code != 0:
+                    log_append(app, f"WARN: tile failed {stem}")
+                    attempt_failed = True
+                    break
+                if output_has_content(app.parsed, stem, MIN_TILE_CHARS) or output_complete(
+                    app.parsed, stem
+                ):
+                    stems_ok.append(stem)
+                else:
+                    log_append(app, f"WARN: tile empty or missing output {stem}")
+                    attempt_failed = True
+                    break
+        finally:
+            for temp in ocr_temps:
+                temp.unlink(missing_ok=True)
 
-        if conversion_failed(out):
-            log_append(app, "WARN: docling reported conversion failure in output")
-        if code == 0 and not conversion_failed(out):
-            if output_valid(app.parsed, job_id):
+        if not attempt_failed and stems_ok:
+            if len(stems_ok) == 1 and stems_ok[0] == job_id:
                 rename_job_outputs(app.parsed, job_id, out_key)
                 if output_valid(app.parsed, out_key):
                     remove_unwanted(app.parsed, job_id)
                     remove_unwanted(app.parsed, out_key)
                     return True
-                log_append(app, f"WARN: empty output after rename for {out_key}")
-            elif output_complete(app.parsed, job_id):
-                log_append(app, f"WARN: docling ok but output empty for {job_id}")
-            else:
-                log_append(app, f"WARN: docling ok but missing output for {out_key}")
+            elif len(stems_ok) == 1 and stems_ok[0] != out_key:
+                rename_job_outputs(app.parsed, stems_ok[0], out_key)
+                if output_valid(app.parsed, out_key):
+                    cleanup_job_artifacts(app.parsed, job_id, out_key)
+                    return True
+            elif merge_parsed_outputs(app, stems_ok, out_key):
+                cleanup_job_artifacts(app.parsed, job_id, out_key)
+                return True
+            log_append(app, f"WARN: merged output empty for {out_key}")
 
         if attempt < MAX_ATTEMPTS:
             log_append(app, f"Retry in {RETRY_DELAY_SEC} s...")
             time.sleep(RETRY_DELAY_SEC)
 
-    cleanup_artifacts(app.parsed, job_id)
-    cleanup_artifacts(app.parsed, out_key)
+    cleanup_job_artifacts(app.parsed, job_id, out_key)
     return False
 
 
@@ -816,7 +992,7 @@ def main() -> int:
         say("  pip install docling   (v tom zhe Python chto zapuskaet skript)")
         say("  ili:")
         say("  set DOCLING_PYTHON=C:\\Users\\andrey.danilov\\AppData\\Local\\miniconda3\\python.exe")
-        say("  python run_docling_parse_v2.0.6.py --python C:\\...\\miniconda3\\python.exe")
+        say("  python run_docling_parse_v2.0.7.py --python C:\\...\\miniconda3\\python.exe")
         log_append(app, "ERROR: docling not found")
         for doc in find_docling_exe_paths():
             log_append(app, f"  found docling.exe: {doc}")
