@@ -1,14 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
 # PyInstaller spec: updated_scroll_capture.exe (Windows)
 
-import os
-
 block_cipher = None
-project_root = os.path.abspath(os.path.join(SPEC, ".."))
 
 a = Analysis(
-    [os.path.join(project_root, "updated_scroll_capture.py")],
-    pathex=[project_root],
+    ['updated_scroll_capture.py'],
+    pathex=['.'],
     binaries=[],
     datas=[],
     hiddenimports=[
@@ -21,12 +18,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[
-        'playwright',
-        'matplotlib',
-        'tkinter',
-        'pytest',
-    ],
+    excludes=['playwright', 'matplotlib', 'tkinter', 'pytest'],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

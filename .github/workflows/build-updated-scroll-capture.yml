@@ -7,7 +7,7 @@ on:
     paths:
       - "updated_scroll_capture.py"
       - "scroll_long_screenshot.py"
-      - "build/updated_scroll_capture.spec"
+      - "updated_scroll_capture.spec"
       - ".github/workflows/build-updated-scroll-capture.yml"
 
 permissions:
@@ -32,7 +32,7 @@ jobs:
 
       - name: Build EXE with PyInstaller
         run: |
-          pyinstaller build/updated_scroll_capture.spec --noconfirm --clean
+          pyinstaller updated_scroll_capture.spec --noconfirm --clean
 
       - name: Show EXE info
         shell: pwsh
