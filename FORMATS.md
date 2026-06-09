@@ -1,4 +1,4 @@
-# Поддерживаемые форматы (run_docling_parse_v1.5.bat)
+# Поддерживаемые форматы (run_docling_parse v2.0)
 
 | Gruppa | Rasshireniya | Docling `--from` | Osobennosti |
 |--------|-------------|------------------|-------------|
@@ -13,13 +13,14 @@
 
 **Vyhod:** tolko `parsed\<klyuch>.md` i `parsed\<klyuch>.html`
 
-**Work copy:** fajly s kiriillicej i skobkami v imeni kopiruyutsya v `work\job_<N>_<random>.ext`, rezultat pereimenovyvaetsya v `<klyuch>.md/html`.
+**OUT_KEY:** `docs\file.pdf` → `file`; `docs\sub\file.pdf` → `sub_file`
 
-## Dopolnitelno ustanovit
+**Work copy:** `work\job_<N>_<random>.ext` → rename v `<klyuch>.md/html`
+
+## Dopolnitelno
 
 ```bat
 pip install docling
 pip install "docling[asr]"
+build.bat
 ```
-
-Video: ustanovite [ffmpeg](https://ffmpeg.org/) v PATH.
