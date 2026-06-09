@@ -19,6 +19,9 @@ python run_docling_parse_v2.0.py
 | `DOCLING_ROOT` | То же через env |
 | `--pause` | Ждать Enter в конце |
 | `PILLOW_MAX_IMAGE_PIXELS` | Лимит Pillow для больших PNG (по умолчанию `9999999999`) |
+| `DOCLING_PILLOW_MAX_PIXELS` | То же (приоритетнее) |
+
+Docling запускается как `python -m docling` (тот же интерпретатор), чтобы `PILLOW` доходил до Pillow.
 
 По умолчанию **ROOT** = папка со скриптом.
 

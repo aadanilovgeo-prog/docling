@@ -7,8 +7,12 @@ docs/  ->  parsed/  (.md + .html)
 
 from __future__ import annotations
 
-import argparse
 import os
+
+# Must be set before Pillow is imported (in this process or child python -m docling).
+os.environ.setdefault("PILLOW_MAX_IMAGE_PIXELS", "9999999999")
+
+import argparse
 import random
 import shutil
 import subprocess
@@ -19,7 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
-VERSION = "2.0.0"
+VERSION = "2.0.1"
 DEFAULT_PILLOW = "9999999999"
 MAX_ATTEMPTS = 3
 RETRY_DELAY_SEC = 5
@@ -187,10 +191,38 @@ def ensure_dirs(app: App) -> None:
 
 
 def find_docling_cmd() -> list[str]:
-    exe = shutil.which("docling")
-    if exe:
-        return [exe]
-    return [sys.executable, "-m", "docling"]
+    """Use same Python interpreter so PILLOW_MAX_IMAGE_PIXELS reaches Pillow."""
+    return [sys.executable, "-u", "-m", "docling"]
+
+
+def pillow_limit() -> str:
+    return (
+        os.environ.get("DOCLING_PILLOW_MAX_PIXELS")
+        or os.environ.get("PILLOW_MAX_IMAGE_PIXELS")
+        or DEFAULT_PILLOW
+    )
+
+
+def apply_pillow_limit() -> None:
+    val = pillow_limit()
+    os.environ["PILLOW_MAX_IMAGE_PIXELS"] = val
+    try:
+        from PIL import Image
+
+        Image.MAX_IMAGE_PIXELS = int(val)
+    except (ImportError, ValueError, OverflowError):
+        pass
+
+
+def child_env(app: App) -> dict[str, str]:
+    env = os.environ.copy()
+    env["PILLOW_MAX_IMAGE_PIXELS"] = pillow_limit()
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUNBUFFERED"] = "1"
+    env["TEMP"] = str(app.tmp)
+    env["TMP"] = str(app.tmp)
+    return env
 
 
 def build_docling_cmd(
@@ -216,18 +248,36 @@ def build_docling_cmd(
     return cmd
 
 
-def run_docling(cmd: list[str], app: App) -> int:
+def run_docling(cmd: list[str], app: App) -> tuple[int, str]:
     log_append(app, "CMD " + " ".join(f'"{c}"' if " " in c else c for c in cmd))
+    log_append(app, f"PILLOW_MAX_IMAGE_PIXELS={pillow_limit()}")
+    captured: list[str] = []
     with app.log_file.open("a", encoding="utf-8") as lf:
         proc = subprocess.run(
             cmd,
-            stdout=lf,
+            stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             cwd=str(app.root),
-            env=os.environ.copy(),
+            env=child_env(app),
+            text=True,
+            encoding="utf-8",
+            errors="replace",
         )
+        if proc.stdout:
+            lf.write(proc.stdout)
+            captured.append(proc.stdout)
     log_append(app, f"EXIT {proc.returncode}")
-    return proc.returncode
+    return proc.returncode, captured[-1] if captured else ""
+
+
+def conversion_failed(output: str) -> bool:
+    markers = (
+        "DecompressionBombError",
+        "failed to convert",
+        "is not valid",
+        "Could not load image",
+    )
+    return any(m in output for m in markers)
 
 
 def run_with_retry(app: App, src: Path, job_id: str, out_key: str, ext: str) -> bool:
@@ -250,8 +300,12 @@ def run_with_retry(app: App, src: Path, job_id: str, out_key: str, ext: str) -> 
         ocr_tag = ", OCR" if use_ocr else ""
         say(f"  -> attempt {attempt}/{MAX_ATTEMPTS} ({spec.kind}{ocr_tag})")
 
-        code = run_docling(build_docling_cmd(find_docling_cmd(), app, src, spec, use_ocr), app)
-        if code == 0:
+        code, out = run_docling(
+            build_docling_cmd(find_docling_cmd(), app, src, spec, use_ocr), app
+        )
+        if conversion_failed(out):
+            log_append(app, "WARN: docling reported conversion failure in output")
+        if code == 0 and not conversion_failed(out):
             if output_complete(app.parsed, job_id):
                 rename_job_outputs(app.parsed, job_id, out_key)
                 if output_complete(app.parsed, out_key):
@@ -337,7 +391,7 @@ def handle_file(app: App, src: Path) -> None:
 
 
 def setup_env(app: App) -> None:
-    os.environ.setdefault("PILLOW_MAX_IMAGE_PIXELS", DEFAULT_PILLOW)
+    apply_pillow_limit()
     os.environ.setdefault("PYTHONUTF8", "1")
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
     os.environ["TEMP"] = str(app.tmp)
@@ -345,13 +399,11 @@ def setup_env(app: App) -> None:
 
 
 def check_docling() -> bool:
-    if shutil.which("docling"):
-        return True
     try:
         import docling  # noqa: F401
         return True
     except ImportError:
-        return False
+        return bool(shutil.which("docling"))
 
 
 def parse_args() -> argparse.Namespace:
@@ -397,7 +449,8 @@ def main() -> int:
     say("")
 
     log_append(app, f"Started v{VERSION}")
-    log_append(app, f"PILLOW_MAX_IMAGE_PIXELS={os.environ.get('PILLOW_MAX_IMAGE_PIXELS', DEFAULT_PILLOW)}")
+    log_append(app, f"PILLOW_MAX_IMAGE_PIXELS={pillow_limit()}")
+    log_append(app, f"Python: {sys.executable}")
 
     if not check_docling():
         say("OSHIBKA: docling ne ustanovlen. pip install docling")
