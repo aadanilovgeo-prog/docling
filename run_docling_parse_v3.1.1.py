@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Docling batch parser v3.1.0 — single-file runner.
+Docling batch parser v3.1.1 — single-file runner.
 
 docs/  ->  parsed/  (.md + .html)
 """
@@ -27,7 +27,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Iterator, Literal
 
-VERSION = "3.1.0"
+VERSION = "3.1.1"
 
 DEFAULT_PILLOW = "9999999999"
 DEFAULT_OCR_MAX_PIXELS = 50_000_000
@@ -284,14 +284,20 @@ def cleanup_artifacts(parsed: Path, key: str) -> None:
     shutil.rmtree(parsed / key, ignore_errors=True)
 
 
-def cleanup_job_artifacts(parsed: Path, job_id: str, out_key: str) -> None:
+def cleanup_job_temp(parsed: Path, job_id: str) -> None:
+    """Remove temporary job/tile files only — never the final out_key."""
     cleanup_artifacts(parsed, job_id)
-    cleanup_artifacts(parsed, out_key)
     for path in list(parsed.glob(f"{job_id}_*")):
         if path.is_file() and path.suffix in OUTPUT_SUFFIXES:
             path.unlink(missing_ok=True)
         elif path.is_dir():
             shutil.rmtree(path, ignore_errors=True)
+
+
+def cleanup_job_artifacts(parsed: Path, job_id: str, out_key: str) -> None:
+    """Before retry: clear temp job files and stale final output."""
+    cleanup_job_temp(parsed, job_id)
+    cleanup_artifacts(parsed, out_key)
 
 
 def remove_unwanted(parsed: Path, key: str) -> None:
@@ -317,7 +323,7 @@ def rename_job_outputs(parsed: Path, job_id: str, out_key: str) -> None:
 def merge_parsed_outputs(parsed: Path, stems: list[str], out_key: str) -> bool:
     md_parts: list[str] = []
     html_parts: list[str] = []
-    for stem in stems:
+    for stem in sorted(stems):
         md_path = _pair(parsed, stem, ".md")
         html_path = _pair(parsed, stem, ".html")
         if md_path.is_file():
@@ -344,6 +350,17 @@ def merge_parsed_outputs(parsed: Path, stems: list[str], out_key: str) -> bool:
         if stem != out_key:
             cleanup_artifacts(parsed, stem)
     return output_valid(parsed, out_key)
+
+
+def merge_parsed_outputs_logged(app: App, stems: list[str], out_key: str) -> bool:
+    ok = merge_parsed_outputs(app.parsed, stems, out_key)
+    if ok:
+        log_append(
+            app,
+            f"Merged {len(stems)} tiles -> {out_key}.md, {out_key}.html",
+        )
+        say(f"  [MERGE] {out_key}.md + .html ({len(stems)} tiles)")
+    return ok
 
 
 def _png_size_fast(path: Path) -> tuple[int, int] | None:
@@ -666,16 +683,17 @@ def run_docling(args: list[str], app: App) -> tuple[int, str]:
 
 
 def _finalize_success(app: App, stems: list[str], job_id: str, out_key: str) -> bool:
+    ok = False
     if len(stems) == 1:
         rename_job_outputs(app.parsed, stems[0], out_key)
-        if output_valid(app.parsed, out_key):
-            cleanup_job_artifacts(app.parsed, job_id, out_key)
-            return True
-        return False
-    if merge_parsed_outputs(app.parsed, stems, out_key):
-        cleanup_job_artifacts(app.parsed, job_id, out_key)
-        return True
-    return False
+        ok = output_valid(app.parsed, out_key)
+        if ok:
+            log_append(app, f"Output ready: {out_key}.md + .html")
+    else:
+        ok = merge_parsed_outputs_logged(app, stems, out_key)
+    if ok:
+        cleanup_job_temp(app.parsed, job_id)
+    return ok
 
 
 def _process_tiles(
