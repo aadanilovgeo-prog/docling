@@ -7,15 +7,15 @@
 | Реализация | Файл | Запуск |
 |------------|------|--------|
 | **BAT v1.5** | `run_docling_parse_v1.5.bat` | Двойной щелчок (свой `cmd /k`) |
-| **C v2.0** | `run_docling_parse.exe` | Двойной щелчок **без BAT** |
+| **C v3.0** | `run_docling_parse.exe` | Двойной щелчок **без BAT** |
 
-Обе делают одно и то же: `docs\` → `parsed\` (только md + html). Можно пользоваться **любой одной**.
+Обе делают одно: `docs\` → `parsed\` (md + html). BAT — полный CMD-скрипт; exe — минимальный лаунчер.
 
 ---
 
-## C: `run_docling_parse.exe` (автономный)
+## C: `run_docling_parse.exe` (v3.0)
 
-**Не требует BAT.** Скачайте готовый exe или соберите сами.
+Минимальный батч-раннер: сканирует `docs\`, вызывает `python -m docling`, пишет `.md` + `.html` в `parsed\`.
 
 ### Скачать (всегда актуальная сборка с main)
 
@@ -37,20 +37,13 @@ MSVC `cl` или MinGW `gcc` (см. `build.bat`).
 
 ### Поведение exe
 
-- Сам открывает консоль, задаёт заголовок окна
-- В конце ждёт **Enter** (окно не исчезает)
-- `--no-pause` или `DOCLING_NO_PAUSE=1` — для скриптов/планировщика
-- **ROOT** по умолчанию = **папка, где лежит exe** (рядом должны быть `docs\`, создаются `parsed\`, `logs\`, `work\`)
-- Переопределение: `set DOCLING_ROOT=C:\path\to\docling`
-
-### Оптимизации (только C)
-
-- Потоковый лог (растёт во время работы Docling)
-- Прогресс пакета `[ 33%] 2/6`
-- `--document-timeout` 7200 с (`DOCLING_TIMEOUT`, `0` = без лимита)
-- При старте создаёт `docs`, `parsed`, `logs`, `work`, `work\tmp` если нет
-- `PILLOW_MAX_IMAGE_PIXELS=9999999999` — большие PNG (scroll capture), обход DecompressionBombError
-- Unicode `CopyFileW`, work copy `job_*`
+- **ROOT** = папка exe (или `DOCLING_ROOT`)
+- Создаёт `docs\`, `parsed\`, `logs\` при старте
+- Запускает `python.exe -m docling` (или `DOCLING_PYTHON`)
+- Пропускает файлы, у которых уже есть `.md` + `.html`
+- Лог: `logs\run_YYYYMMDD_HHMMSS.log` (включая stdout/stderr docling)
+- `PILLOW_MAX_IMAGE_PIXELS=9999999999` для больших PNG
+- `DOCLING_TIMEOUT` — таймаут документа в секундах (по умолчанию 7200)
 
 Исходник: `src/run_docling_parse.c`
 
@@ -75,7 +68,6 @@ run_docling_parse_v1.5.bat
 | `docs` | Вход, рекурсивно |
 | `parsed` | `.md` + `.html` |
 | `logs` | Логи |
-| `work` | Копии + `tmp` (TEMP) |
 
 Форматы: [FORMATS.md](FORMATS.md)
 
