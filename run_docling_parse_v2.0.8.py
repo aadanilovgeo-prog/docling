@@ -485,7 +485,7 @@ def prepare_ocr_inputs(
             app,
             f"WARN: planned {plan.count} tiles, created {len(tiles)} — using actual count",
         )
-        plan = TilePlan(len(tiles), plan.mode, f"{w}x{h} -> {len(tiles)} strips ({plan.mode})")
+        plan = TilePlan(len(tiles), plan.mode, plan.label.replace(str(plan.count), str(len(tiles)), 1))
     return tiles, temps, plan
 
 

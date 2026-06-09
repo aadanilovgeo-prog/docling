@@ -1,6 +1,6 @@
 # docling
 
-**Версия: 2.0.7** · ветка `main`
+**Версия: 2.0.8** · ветка `main`
 
 Пакетная обработка документов через [Docling CLI](https://docling-project.github.io/docling/).
 
@@ -8,7 +8,7 @@
 
 ```bat
 pip install -r requirements.txt
-python run_docling_parse_v2.0.7.py
+python run_docling_parse_v2.0.8.py
 ```
 
 Двойной щелчок по `.py` (если Python ассоциирован с файлами) — окно останется открытым до Enter.
@@ -32,7 +32,7 @@ python run_docling_parse_v2.0.7.py
 
 ```bat
 set DOCLING_PYTHON=%LOCALAPPDATA%\miniconda3\python.exe
-python run_docling_parse_v2.0.7.py
+python run_docling_parse_v2.0.8.py
 ```
 
 По умолчанию **ROOT** = папка со скриптом.
@@ -50,7 +50,7 @@ python run_docling_parse_v2.0.7.py
 
 Форматы: [FORMATS.md](FORMATS.md)
 
-## Поведение (v2.0.7)
+## Поведение (v2.0.8)
 
 - Рекурсивный обход `docs\`
 - Пропуск готовых пар `.md` + `.html` **с непустым содержимым**
