@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Docling batch parser v2.0 — Python port of run_docling_parse_v1.5.bat (v1.6 logic).
+Docling batch parser v2.0.1 — Python port of BAT v1.6 logic.
 
 docs/  ->  parsed/  (.md + .html)
 """

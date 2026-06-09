@@ -1,12 +1,14 @@
 # docling
 
+**Версия: 2.0.1** · ветка `main`
+
 Пакетная обработка документов через [Docling CLI](https://docling-project.github.io/docling/).
 
 ## Запуск
 
 ```bat
 pip install -r requirements.txt
-python run_docling_parse_v2.0.py
+python run_docling_parse_v2.0.1.py
 ```
 
 Двойной щелчок по `.py` (если Python ассоциирован с файлами) — окно останется открытым до Enter.
@@ -38,7 +40,7 @@ Docling запускается как `python -m docling` (тот же инте�
 
 Форматы: [FORMATS.md](FORMATS.md)
 
-## Поведение (как в BAT v1.6)
+## Поведение (v2.0.1)
 
 - Рекурсивный обход `docs\`
 - Пропуск готовых пар `.md` + `.html`
