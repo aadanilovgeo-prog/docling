@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Docling batch parser v3.1.1 — single-file runner.
+Docling batch parser v3.1.2 — single-file runner.
 
 docs/  ->  parsed/  (.md + .html)
 """
@@ -27,7 +27,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Iterator, Literal
 
-VERSION = "3.1.1"
+VERSION = "3.1.2"
+DEFAULT_OCR_ENGINE = "tesseract"
+DEFAULT_OCR_LANG = "rus"
 
 DEFAULT_PILLOW = "9999999999"
 DEFAULT_OCR_MAX_PIXELS = 50_000_000
@@ -202,6 +204,20 @@ def ocr_max_pixels() -> int:
     return DEFAULT_OCR_MAX_PIXELS
 
 
+def ocr_engine_name() -> str:
+    return os.environ.get("DOCLING_OCR_ENGINE", DEFAULT_OCR_ENGINE)
+
+
+def ocr_lang_codes() -> str:
+    return os.environ.get("DOCLING_OCR_LANG", DEFAULT_OCR_LANG)
+
+
+def ocr_cli_options(use_ocr: bool) -> list[str]:
+    if not use_ocr:
+        return []
+    return ["--ocr-engine", ocr_engine_name(), "--ocr-lang", ocr_lang_codes()]
+
+
 def ocr_max_side_for_attempt(attempt: int) -> int:
     idx = min(attempt - 1, len(OCR_MAX_SIDES) - 1)
     raw = os.environ.get("DOCLING_OCR_MAX_SIDE")
@@ -320,6 +336,20 @@ def rename_job_outputs(parsed: Path, job_id: str, out_key: str) -> None:
             src.rename(dst)
 
 
+def _html_body_fragment(html: str) -> str:
+    match = re.search(r"<body[^>]*>(.*)</body>", html, re.I | re.S)
+    return match.group(1).strip() if match else html.strip()
+
+
+def _html_document(body: str) -> str:
+    return (
+        "<!DOCTYPE html>\n<html><head>"
+        '<meta charset="utf-8">'
+        "</head><body>\n"
+        f"{body}\n</body></html>"
+    )
+
+
 def merge_parsed_outputs(parsed: Path, stems: list[str], out_key: str) -> bool:
     md_parts: list[str] = []
     html_parts: list[str] = []
@@ -333,19 +363,15 @@ def merge_parsed_outputs(parsed: Path, stems: list[str], out_key: str) -> bool:
         if html_path.is_file():
             text = html_path.read_text(encoding="utf-8", errors="replace").strip()
             if text:
-                html_parts.append(text)
+                html_parts.append(_html_body_fragment(text))
     if not md_parts and not html_parts:
         return False
     _pair(parsed, out_key, ".md").write_text("\n\n---\n\n".join(md_parts), encoding="utf-8")
     if html_parts:
         body = "\n<hr/>\n".join(html_parts)
-        if not re.search(r"<html\b", body, re.I):
-            body = f"<!DOCTYPE html>\n<html><body>\n{body}\n</body></html>"
-        _pair(parsed, out_key, ".html").write_text(body, encoding="utf-8")
+        _pair(parsed, out_key, ".html").write_text(_html_document(body), encoding="utf-8")
     else:
-        _pair(parsed, out_key, ".html").write_text(
-            "<!DOCTYPE html>\n<html><body></body></html>", encoding="utf-8",
-        )
+        _pair(parsed, out_key, ".html").write_text(_html_document(""), encoding="utf-8")
     for stem in stems:
         if stem != out_key:
             cleanup_artifacts(parsed, stem)
@@ -610,6 +636,7 @@ def build_docling_args(app: App, src: Path, spec: FormatSpec, use_ocr: bool) -> 
         *spec.from_arg, *spec.pipeline, *spec.pdf,
         "--ocr" if use_ocr else "--no-ocr", *spec.tables,
         "--image-export-mode", image_mode, "-v", str(src),
+        *ocr_cli_options(use_ocr),
     ]
     if spec.kind == "image" and use_ocr:
         args.append("--force-ocr")
@@ -869,7 +896,9 @@ def main() -> int:
         return 1
 
     say(f"Docling: {runtime.label}")
+    say(f"OCR:     {ocr_engine_name()} / lang={ocr_lang_codes()}")
     log_append(app, f"Docling runtime: {runtime.label}")
+    log_append(app, f"OCR engine={ocr_engine_name()} lang={ocr_lang_codes()}")
     say(f"Input:   {app.docs}")
     say(f"Output:  {app.parsed}")
     say(f"Log:     {app.log_file}")

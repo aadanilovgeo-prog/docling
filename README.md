@@ -1,6 +1,6 @@
 # docling
 
-**Версия: 3.1.1** · ветка `main`
+**Версия: 3.1.2** · ветка `main`
 
 Пакетная обработка документов через [Docling CLI](https://docling-project.github.io/docling/).
 
