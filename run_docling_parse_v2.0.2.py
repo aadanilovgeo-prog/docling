@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Docling batch parser v2.0.1 — Python port of BAT v1.6 logic.
+Docling batch parser v2.0.2 — Python port of BAT v1.6 logic.
 
 docs/  ->  parsed/  (.md + .html)
 """
@@ -23,7 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
-VERSION = "2.0.1"
+VERSION = "2.0.2"
 DEFAULT_PILLOW = "9999999999"
 MAX_ATTEMPTS = 3
 RETRY_DELAY_SEC = 5
@@ -190,11 +190,6 @@ def ensure_dirs(app: App) -> None:
         p.mkdir(parents=True, exist_ok=True)
 
 
-def find_docling_cmd() -> list[str]:
-    """Use same Python interpreter so PILLOW_MAX_IMAGE_PIXELS reaches Pillow."""
-    return [sys.executable, "-u", "-m", "docling"]
-
-
 def pillow_limit() -> str:
     return (
         os.environ.get("DOCLING_PILLOW_MAX_PIXELS")
@@ -225,15 +220,13 @@ def child_env(app: App) -> dict[str, str]:
     return env
 
 
-def build_docling_cmd(
-    base: list[str],
+def build_docling_args(
     app: App,
     src: Path,
     spec: FormatSpec,
     use_ocr: bool,
 ) -> list[str]:
-    cmd = [
-        *base,
+    return [
         "--to", "md",
         "--to", "html",
         "--output", str(app.parsed),
@@ -245,14 +238,61 @@ def build_docling_cmd(
         "--image-export-mode", "placeholder",
         "-v", str(src),
     ]
-    return cmd
 
 
-def run_docling(cmd: list[str], app: App) -> tuple[int, str]:
-    log_append(app, "CMD " + " ".join(f'"{c}"' if " " in c else c for c in cmd))
-    log_append(app, f"PILLOW_MAX_IMAGE_PIXELS={pillow_limit()}")
-    captured: list[str] = []
-    with app.log_file.open("a", encoding="utf-8") as lf:
+def _write_log_output(app: App, output: str) -> None:
+    if output:
+        with app.log_file.open("a", encoding="utf-8") as lf:
+            lf.write(output)
+
+
+def run_docling_inprocess(args: list[str], app: App) -> tuple[int, str]:
+    """Run docling CLI in this process — PILLOW limit applied before import."""
+    apply_pillow_limit()
+    import io
+    from contextlib import redirect_stderr, redirect_stdout
+
+    buf = io.StringIO()
+    old_argv = sys.argv[:]
+    sys.argv = ["docling", *args]
+    code = 0
+    try:
+        with redirect_stdout(buf), redirect_stderr(buf):
+            from docling.cli.main import app as cli_app
+
+            try:
+                cli_app()
+            except SystemExit as exc:
+                if isinstance(exc.code, int):
+                    code = exc.code
+                elif exc.code is None:
+                    code = 0
+                else:
+                    code = 1
+    except Exception:
+        import traceback
+
+        traceback.print_exc(file=buf)
+        code = 1
+    finally:
+        sys.argv = old_argv
+
+    output = buf.getvalue()
+    _write_log_output(app, output)
+    return code, output
+
+
+def run_docling_subprocess(args: list[str], app: App) -> tuple[int, str]:
+    """Fallback: python -m docling.cli.main or docling.exe."""
+    bases: list[list[str]] = [[sys.executable, "-u", "-m", "docling.cli.main"]]
+    exe = shutil.which("docling")
+    if exe:
+        bases.append([exe])
+
+    last_out = ""
+    for base in bases:
+        cmd = [*base, *args]
+        log_append(app, "CMD " + " ".join(f'"{c}"' if " " in c else c for c in cmd))
         proc = subprocess.run(
             cmd,
             stdout=subprocess.PIPE,
@@ -263,11 +303,26 @@ def run_docling(cmd: list[str], app: App) -> tuple[int, str]:
             encoding="utf-8",
             errors="replace",
         )
-        if proc.stdout:
-            lf.write(proc.stdout)
-            captured.append(proc.stdout)
-    log_append(app, f"EXIT {proc.returncode}")
-    return proc.returncode, captured[-1] if captured else ""
+        out = proc.stdout or ""
+        _write_log_output(app, out)
+        last_out = out
+        log_append(app, f"EXIT {proc.returncode}")
+        if proc.returncode == 0 or "No module named" not in out:
+            return proc.returncode, out
+    return 1, last_out
+
+
+def run_docling(args: list[str], app: App) -> tuple[int, str]:
+    log_append(app, "CMD docling " + " ".join(f'"{a}"' if " " in a else a for a in args))
+    log_append(app, f"PILLOW_MAX_IMAGE_PIXELS={pillow_limit()}")
+    log_append(app, f"Mode: in-process ({sys.executable})")
+    try:
+        code, out = run_docling_inprocess(args, app)
+        log_append(app, f"EXIT {code}")
+        return code, out
+    except ImportError as exc:
+        log_append(app, f"WARN: in-process failed ({exc}), subprocess fallback")
+        return run_docling_subprocess(args, app)
 
 
 def conversion_failed(output: str) -> bool:
@@ -276,6 +331,8 @@ def conversion_failed(output: str) -> bool:
         "failed to convert",
         "is not valid",
         "Could not load image",
+        "No module named docling",
+        "cannot be directly executed",
     )
     return any(m in output for m in markers)
 
@@ -300,9 +357,7 @@ def run_with_retry(app: App, src: Path, job_id: str, out_key: str, ext: str) -> 
         ocr_tag = ", OCR" if use_ocr else ""
         say(f"  -> attempt {attempt}/{MAX_ATTEMPTS} ({spec.kind}{ocr_tag})")
 
-        code, out = run_docling(
-            build_docling_cmd(find_docling_cmd(), app, src, spec, use_ocr), app
-        )
+        code, out = run_docling(build_docling_args(app, src, spec, use_ocr), app)
         if conversion_failed(out):
             log_append(app, "WARN: docling reported conversion failure in output")
         if code == 0 and not conversion_failed(out):
