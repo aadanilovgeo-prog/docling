@@ -100,7 +100,7 @@ static int ieq(const wchar_t *a, const wchar_t *b)
     return _wcsicmp(a, b) == 0;
 }
 
-static void logf(const wchar_t *fmt, ...)
+static void write_log(const wchar_t *fmt, ...)
 {
     if (!g_log) return;
     va_list ap;
@@ -296,11 +296,11 @@ static int run_docling(const wchar_t *src, const wchar_t *fmt)
         g.python, g.parsed, fmt, timeout, src);
 
     if (n <= 0 || n >= MAX_CMD) {
-        logf(L"ERROR command too long: %s", src);
+        write_log(L"ERROR command too long: %s", src);
         return -1;
     }
 
-    logf(L"CMD %s", cmd);
+    write_log(L"CMD %s", cmd);
 
     wchar_t cap[MAX_PATH_W];
     swprintf(cap, MAX_PATH_W, L"%s\\_child_%u.log", g.logs,
@@ -311,7 +311,7 @@ static int run_docling(const wchar_t *src, const wchar_t *fmt)
     HANDLE out = CreateFileW(cap, GENERIC_WRITE, FILE_SHARE_READ, &sa,
                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (out == INVALID_HANDLE_VALUE) {
-        logf(L"ERROR cannot open capture log");
+        write_log(L"ERROR cannot open capture log");
         return -1;
     }
 
@@ -340,7 +340,7 @@ static int run_docling(const wchar_t *src, const wchar_t *fmt)
     CloseHandle(out);
 
     if (!ok) {
-        logf(L"ERROR CreateProcess %lu", GetLastError());
+        write_log(L"ERROR CreateProcess %lu", GetLastError());
         DeleteFileW(cap);
         return -1;
     }
@@ -353,7 +353,7 @@ static int run_docling(const wchar_t *src, const wchar_t *fmt)
 
     append_file_to_log(cap);
     DeleteFileW(cap);
-    logf(L"EXIT %lu", code);
+    write_log(L"EXIT %lu", code);
     return (int)code;
 }
 
@@ -376,7 +376,7 @@ static void process_file(const wchar_t *path)
     if (output_ready(key)) {
         g.skipped++;
         wprintf(L"[skip] %s\n", key);
-        logf(L"[skip] %s", path);
+        write_log(L"[skip] %s", path);
         return;
     }
 
@@ -384,19 +384,19 @@ static void process_file(const wchar_t *path)
     if (!fmt[0]) return;
 
     wprintf(L"[run]  %s\n", key);
-    logf(L"[run] %s key=%s", path, key);
+    write_log(L"[run] %s key=%s", path, key);
 
     int rc = run_docling(path, fmt);
     if (rc == 0 && output_ready(key)) {
         g.done++;
         wprintf(L"[ok]   %s\n", key);
-        logf(L"[ok] %s", path);
+        write_log(L"[ok] %s", path);
         return;
     }
 
     g.failed++;
     wprintf(L"[fail] %s (code %d)\n", key, rc);
-    logf(L"[fail] %s code=%d", path, rc);
+    write_log(L"[fail] %s code=%d", path, rc);
 }
 
 static void scan_dir(const wchar_t *dir)
@@ -499,7 +499,7 @@ int wmain(int argc, wchar_t **argv)
 
     if (!find_python()) {
         say(L"ERROR: python.exe not found. Set DOCLING_PYTHON or install docling.");
-        logf(L"ERROR python not found");
+        write_log(L"ERROR python not found");
         if (g_log) fclose(g_log);
         return 1;
     }
@@ -507,9 +507,9 @@ int wmain(int argc, wchar_t **argv)
     wprintf(L"python: %s\n", g.python);
     wprintf(L"log:    %s\n\n", g.log_path);
 
-    logf(L"start v%ls", VERSION);
-    logf(L"python=%s", g.python);
-    logf(L"pillow=%s", g.pillow_pixels);
+    write_log(L"start v%ls", VERSION);
+    write_log(L"python=%s", g.python);
+    write_log(L"pillow=%s", g.pillow_pixels);
 
     scan_dir(g.docs);
 
@@ -520,7 +520,7 @@ int wmain(int argc, wchar_t **argv)
     wprintf(L"failed:  %d\n", g.failed);
     wprintf(L"log: %s\n", g.log_path);
 
-    logf(L"done found=%d ok=%d skip=%d fail=%d",
+    write_log(L"done found=%d ok=%d skip=%d fail=%d",
          g.total, g.done, g.skipped, g.failed);
 
     if (g_log) fclose(g_log);
