@@ -1,6 +1,6 @@
 # docling
 
-**Версия: 2.0.4** · ветка `main`
+**Версия: 2.0.5** · ветка `main`
 
 Пакетная обработка документов через [Docling CLI](https://docling-project.github.io/docling/).
 
@@ -8,7 +8,7 @@
 
 ```bat
 pip install -r requirements.txt
-python run_docling_parse_v2.0.4.py
+python run_docling_parse_v2.0.5.py
 ```
 
 Двойной щелчок по `.py` (если Python ассоциирован с файлами) — окно останется открытым до Enter.
@@ -21,10 +21,18 @@ python run_docling_parse_v2.0.4.py
 | `DOCLING_ROOT` | То же через env |
 | `--pause` | Ждать Enter в конце |
 | `PILLOW_MAX_IMAGE_PIXELS` | Лимит Pillow для больших PNG (по умолчанию `9999999999`) |
-| `DOCLING_PYTHON` | Python с установленным docling (напр. miniconda) |
+| `DOCLING_PYTHON` | Python с docling (напр. `...\miniconda3\python.exe`) |
+| `--python PATH` | То же через аргумент |
 | `DOCLING_PILLOW_MAX_PIXELS` | Лимит Pillow (приоритетнее `PILLOW_MAX_IMAGE_PIXELS`) |
 
-Скрипт использует `miniconda\Scripts\python.exe -m docling.cli.main` (не `docling.exe` — иначе PILLOW не работает).
+Скрипт ищет `miniconda3\python.exe` рядом с `Scripts\docling.exe` и запускает `python -m docling.cli.main` (не `docling.exe` — иначе PILLOW не работает).
+
+Если docling установлен в miniconda, а скрипт запускается другим Python:
+
+```bat
+set DOCLING_PYTHON=%LOCALAPPDATA%\miniconda3\python.exe
+python run_docling_parse_v2.0.5.py
+```
 
 По умолчанию **ROOT** = папка со скриптом.
 
@@ -41,7 +49,7 @@ python run_docling_parse_v2.0.4.py
 
 Форматы: [FORMATS.md](FORMATS.md)
 
-## Поведение (v2.0.4)
+## Поведение (v2.0.5)
 
 - Рекурсивный обход `docs\`
 - Пропуск готовых пар `.md` + `.html`

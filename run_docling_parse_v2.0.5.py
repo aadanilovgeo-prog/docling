@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Docling batch parser v2.0.4 — Python port of BAT v1.6 logic.
+Docling batch parser v2.0.5 — Python port of BAT v1.6 logic.
 
 docs/  ->  parsed/  (.md + .html)
 """
@@ -23,7 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
-VERSION = "2.0.4"
+VERSION = "2.0.5"
 
 _runtime: "DoclingRuntime | None" = None
 DEFAULT_PILLOW = "9999999999"
@@ -237,12 +237,110 @@ def python_has_docling(py: Path) -> bool:
         return False
 
 
-def python_beside_docling_exe() -> Path | None:
-    doc = shutil.which("docling")
-    if not doc:
-        return None
-    py = Path(doc).parent / "python.exe"
-    return py if py.is_file() else None
+def _conda_roots() -> Iterator[Path]:
+    """Common miniconda/anaconda install roots (double-click often has no PATH)."""
+    seen: set[str] = set()
+
+    def offer(path: Path) -> Iterator[Path]:
+        if not path.is_dir():
+            return
+        key = str(path.resolve())
+        if key in seen:
+            return
+        seen.add(key)
+        yield path
+
+    if local := os.environ.get("LOCALAPPDATA"):
+        yield from offer(Path(local) / "miniconda3")
+        yield from offer(Path(local) / "Programs" / "miniconda3")
+        yield from offer(Path(local) / "anaconda3")
+        yield from offer(Path(local) / "Programs" / "anaconda3")
+
+    home = Path.home()
+    for rel in (
+        "AppData/Local/miniconda3",
+        "AppData/Local/Programs/miniconda3",
+        "AppData/Local/anaconda3",
+        "miniconda3",
+        "Anaconda3",
+    ):
+        yield from offer(home / rel)
+
+    if cp := os.environ.get("CONDA_PREFIX"):
+        yield from offer(Path(cp))
+
+
+def augment_conda_path() -> None:
+    """Double-click often misses miniconda in PATH — add common locations."""
+    extra: list[str] = []
+    for root in _conda_roots():
+        extra.append(str(root))
+        scripts = root / "Scripts"
+        if scripts.is_dir():
+            extra.append(str(scripts))
+    cp = os.environ.get("CONDA_PREFIX")
+    if cp:
+        extra.extend([str(Path(cp) / "Scripts"), cp])
+    if extra:
+        os.environ["PATH"] = os.pathsep.join(extra) + os.pathsep + os.environ.get("PATH", "")
+
+
+def find_docling_exe_paths() -> list[Path]:
+    found: list[Path] = []
+    seen: set[str] = set()
+
+    def add(path: Path) -> None:
+        if not path.is_file():
+            return
+        key = str(path.resolve())
+        if key in seen:
+            return
+        seen.add(key)
+        found.append(path)
+
+    hit = shutil.which("docling")
+    if hit:
+        add(Path(hit))
+
+    for root in _conda_roots():
+        add(root / "Scripts" / "docling.exe")
+
+    return found
+
+
+def python_for_docling_exe(docling_exe: Path) -> Path | None:
+    """conda: Scripts\\docling.exe + ..\\python.exe ; venv: Scripts\\python.exe"""
+    scripts = docling_exe.parent
+    for candidate in (scripts / "python.exe", scripts.parent / "python.exe"):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def iter_python_candidates() -> Iterator[Path]:
+    seen: set[str] = set()
+
+    def offer(path: Path) -> Iterator[Path]:
+        if not path.is_file():
+            return
+        key = str(path.resolve())
+        if key in seen:
+            return
+        seen.add(key)
+        yield path
+
+    if env_py := os.environ.get("DOCLING_PYTHON"):
+        yield from offer(Path(env_py))
+
+    for doc in find_docling_exe_paths():
+        py = python_for_docling_exe(doc)
+        if py:
+            yield from offer(py)
+
+    for root in _conda_roots():
+        yield from offer(root / "python.exe")
+
+    yield from offer(Path(sys.executable))
 
 
 def _make_runtime(py: Path) -> DoclingRuntime:
@@ -257,22 +355,18 @@ def resolve_docling_runtime() -> DoclingRuntime | None:
     if _runtime is not None:
         return _runtime
 
-    env_py = os.environ.get("DOCLING_PYTHON")
-    if env_py:
-        py = Path(env_py)
-        if py.is_file():
+    augment_conda_path()
+
+    trusted: list[Path] = []
+    for doc in find_docling_exe_paths():
+        py = python_for_docling_exe(doc)
+        if py:
+            trusted.append(py.resolve())
+
+    for py in iter_python_candidates():
+        if py.resolve() in trusted or python_has_docling(py):
             _runtime = _make_runtime(py)
             return _runtime
-
-    beside = python_beside_docling_exe()
-    if beside:
-        _runtime = DoclingRuntime("subprocess", beside, f"subprocess ({beside})")
-        return _runtime
-
-    current = Path(sys.executable)
-    if current.is_file() and python_has_docling(current):
-        _runtime = DoclingRuntime("inprocess", current, f"in-process ({current})")
-        return _runtime
 
     return None
 
@@ -534,6 +628,12 @@ def parse_args() -> argparse.Namespace:
         help="Project root (default: script dir or DOCLING_ROOT)",
     )
     parser.add_argument(
+        "--python",
+        type=Path,
+        default=None,
+        help="Python with docling (or set DOCLING_PYTHON)",
+    )
+    parser.add_argument(
         "--pause",
         action="store_true",
         help="Wait for Enter before exit (Windows double-click)",
@@ -543,6 +643,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+
+    if args.python:
+        os.environ["DOCLING_PYTHON"] = str(args.python)
 
     root = args.root
     if root is None:
@@ -572,9 +675,15 @@ def main() -> int:
     runtime = resolve_docling_runtime()
     if runtime is None:
         say("OSHIBKA: docling ne naiden.")
-        say("  Ustanovite: pip install docling")
-        say("  Ili ukazhite: set DOCLING_PYTHON=C:\\path\\to\\python.exe")
+        say("  pip install docling   (v tom zhe Python chto zapuskaet skript)")
+        say("  ili:")
+        say("  set DOCLING_PYTHON=C:\\Users\\andrey.danilov\\AppData\\Local\\miniconda3\\python.exe")
+        say("  python run_docling_parse_v2.0.5.py --python C:\\...\\miniconda3\\python.exe")
         log_append(app, "ERROR: docling not found")
+        for doc in find_docling_exe_paths():
+            log_append(app, f"  found docling.exe: {doc}")
+        for py in iter_python_candidates():
+            log_append(app, f"  tried python: {py}")
         if args.pause:
             input("Enter...")
         return 1
