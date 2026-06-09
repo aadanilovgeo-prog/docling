@@ -35,16 +35,25 @@ python run_docling_parse_v3.1.3.py
 
 ## updated_scroll_capture.exe (Windows)
 
-Готовый EXE для склейки scroll-скриншотов (без Python):
+Готовый EXE для склейки scroll-скриншотов (без Python).
 
-| Файл | Описание |
-|------|----------|
-| `dist/updated_scroll_capture.exe` | Склейка / overlap / capture |
+### Скачать
+
+| Способ | Ссылка |
+|--------|--------|
+| **Releases (рекомендуется)** | https://github.com/aadanilovgeo-prog/docling/releases/latest |
+| Папка в репозитории | https://github.com/aadanilovgeo-prog/docling/tree/main/dist |
+| Прямой файл (~26 МБ) | https://github.com/aadanilovgeo-prog/docling/raw/main/dist/updated_scroll_capture.exe |
+
+После `git pull` локально: `dist\updated_scroll_capture.exe`
 
 ```bat
-dist\updated_scroll_capture.exe stitch captures\ -o docs\page.png
-dist\updated_scroll_capture.exe overlap frame1.png frame2.png
+updated_scroll_capture.exe stitch captures\ -o docs\page.png
+updated_scroll_capture.exe overlap frame1.png frame2.png
 ```
+
+> GitHub в браузере иногда не показывает большие `.exe` в списке файлов —
+> откройте папку **dist** или вкладку **Releases** (справа на главной странице репо).
 
 EXE пересобирается GitHub Actions при изменении `scroll_long_screenshot.py`.
 
