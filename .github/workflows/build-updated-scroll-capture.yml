@@ -58,5 +58,6 @@ jobs:
             Write-Host "No changes to commit"
           } else {
             git commit -m "Build updated_scroll_capture.exe [skip ci]"
-            git push
+            git pull --rebase origin main
+            git push origin main
           }
