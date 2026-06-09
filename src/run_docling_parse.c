@@ -17,7 +17,7 @@
 #include <time.h>
 #include <locale.h>
 
-#define VERSION L"2.0.3"
+#define VERSION L"2.0.4"
 #define DEFAULT_PILLOW_MAX_PIXELS L"9999999999"
 #define MAX_PATH_W 4096
 #define MAX_KEY 1024
@@ -48,6 +48,9 @@ typedef struct {
     wchar_t tmp[MAX_PATH_W];
     wchar_t log_file[MAX_PATH_W];
     wchar_t docling_exe[MAX_PATH_W];
+    wchar_t docling_invoke[MAX_PATH_W];
+    wchar_t docling_prefix[64];
+    int docling_via_python;
     wchar_t input_norm[MAX_PATH_W];
     int total;
     int parsed;
@@ -216,6 +219,36 @@ static int find_docling(wchar_t *out, size_t cap)
     if (n > 0) return 1;
     n = SearchPathW(NULL, L"docling", NULL, (DWORD)cap, out, NULL);
     return n > 0;
+}
+
+/* miniconda/pip: Scripts\docling.exe -> Scripts\python.exe -m docling (reliable PILLOW env). */
+static void resolve_docling_invoke(void)
+{
+    wcsncpy0(g_cfg.docling_invoke, g_cfg.docling_exe, MAX_PATH_W);
+    g_cfg.docling_prefix[0] = L'\0';
+    g_cfg.docling_via_python = 0;
+
+    const wchar_t *exe_name = wcsrchr(g_cfg.docling_exe, L'\\');
+    if (!exe_name) exe_name = wcsrchr(g_cfg.docling_exe, L'/');
+    exe_name = exe_name ? exe_name + 1 : g_cfg.docling_exe;
+    if (_wcsicmp(exe_name, L"docling.exe") != 0)
+        return;
+
+    wchar_t dir[MAX_PATH_W];
+    wcsncpy0(dir, g_cfg.docling_exe, MAX_PATH_W);
+    wchar_t *slash = wcsrchr(dir, L'\\');
+    if (!slash) slash = wcsrchr(dir, L'/');
+    if (!slash) return;
+    *slash = L'\0';
+
+    wchar_t python[MAX_PATH_W];
+    path_join(python, MAX_PATH_W, dir, L"python.exe");
+    if (!file_exists(python))
+        return;
+
+    wcsncpy0(g_cfg.docling_invoke, python, MAX_PATH_W);
+    wcsncpy0(g_cfg.docling_prefix, L"-m docling", 64);
+    g_cfg.docling_via_python = 1;
 }
 
 static int wcsieq(const wchar_t *a, const wchar_t *b)
@@ -494,10 +527,11 @@ static int build_docling_cmd(wchar_t *cmd, size_t cap, const wchar_t *src,
     if (g_cfg.doc_timeout_sec > 0)
         swprintf(timeout, 64, L"--document-timeout %d", g_cfg.doc_timeout_sec);
 
+    const wchar_t *module = g_cfg.docling_prefix[0] ? g_cfg.docling_prefix : L"";
     int n = swprintf(cmd, cap,
-        L"\"%s\" --to md --to html --output \"%s\" %s %s %s %s %s %s "
+        L"\"%s\" %s --to md --to html --output \"%s\" %s %s %s %s %s %s "
         L"--image-export-mode placeholder -v \"%s\"",
-        g_cfg.docling_exe, g_cfg.output,
+        g_cfg.docling_invoke, module, g_cfg.output,
         fi->from ? fi->from : L"",
         fi->pipeline ? fi->pipeline : L"",
         fi->pdf ? fi->pdf : L"",
@@ -510,37 +544,66 @@ static int build_docling_cmd(wchar_t *cmd, size_t cap, const wchar_t *src,
     return n > 0 && (size_t)n < cap;
 }
 
+/* Append new bytes from child capture file into g_log (BAT-style, no pipe deadlock). */
+static void tail_capture_to_log(const wchar_t *capture_path, long *offset)
+{
+    FILE *cap = _wfopen(capture_path, L"rb");
+    if (!cap) return;
+
+    if (fseek(cap, *offset, SEEK_SET) != 0) {
+        fclose(cap);
+        return;
+    }
+
+    char buf[4096];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf) - 1, cap)) > 0) {
+        buf[n] = '\0';
+        fputs(buf, g_log);
+        fflush(g_log);
+    }
+    *offset = ftell(cap);
+    fclose(cap);
+}
+
 /* Launcher .cmd sets PILLOW before Python imports Pillow (large PNG scroll captures). */
-static int write_launcher_cmd(const wchar_t *cmdline, wchar_t *batch_path, size_t batch_cap)
+static int write_launcher_cmd(const wchar_t *cmdline, const wchar_t *capture_path,
+                              wchar_t *batch_path, size_t batch_cap)
 {
     unsigned id = (unsigned)(GetTickCount64() & 0xffffffffu) ^ (unsigned)rand();
     swprintf(batch_path, batch_cap, L"%s\\docling_launch_%u.cmd", g_cfg.tmp, id);
 
     const wchar_t *pillow = get_pillow_max();
-    FILE *f = _wfopen(batch_path, L"w, ccs=UTF-8");
-    if (!f) f = _wfopen(batch_path, L"w");
+    FILE *f = _wfopen(batch_path, L"w");
     if (!f) return 0;
 
     fwprintf(f, L"@echo off\r\n");
     fwprintf(f, L"set PILLOW_MAX_IMAGE_PIXELS=%s\r\n", pillow);
     fwprintf(f, L"set PYTHONUTF8=1\r\n");
     fwprintf(f, L"set PYTHONIOENCODING=utf-8\r\n");
+    fwprintf(f, L"set PYTHONUNBUFFERED=1\r\n");
     fwprintf(f, L"set TEMP=%s\r\n", g_cfg.tmp);
     fwprintf(f, L"set TMP=%s\r\n", g_cfg.tmp);
-    fwprintf(f, L"%s\r\n", cmdline);
+    fwprintf(f, L"%s >> \"%s\" 2>&1\r\n", cmdline, capture_path);
     fwprintf(f, L"exit /b %%ERRORLEVEL%%\r\n");
     fclose(f);
     append_log(L"Launcher: %s PILLOW=%s", batch_path, pillow);
+    append_log(L"Cmd: %s", cmdline);
     return 1;
 }
 
-/* Run docling; stream stdout/stderr to log in real time. Returns process exit code. */
+/* Run docling; capture stdout/stderr via temp file (same approach as BAT). */
 static int run_docling_process(const wchar_t *cmdline)
 {
     wchar_t batch[MAX_PATH_W];
+    wchar_t capture[MAX_PATH_W];
     wchar_t wrapped[MAX_PATH_W + 64];
+    unsigned cap_id = (unsigned)(GetTickCount64() & 0xffffffffu) ^ (unsigned)rand();
 
-    if (!write_launcher_cmd(cmdline, batch, MAX_PATH_W)) {
+    swprintf(capture, MAX_PATH_W, L"%s\\docling_out_%u.log", g_cfg.tmp, cap_id);
+    DeleteFileW(capture);
+
+    if (!write_launcher_cmd(cmdline, capture, batch, MAX_PATH_W)) {
         append_log(L"ERROR: cannot write launcher cmd");
         return -1;
     }
@@ -552,63 +615,47 @@ static int run_docling_process(const wchar_t *cmdline)
         return -1;
     }
 
-    SECURITY_ATTRIBUTES sa;
-    sa.nLength = sizeof(sa);
-    sa.bInheritHandle = TRUE;
-    sa.lpSecurityDescriptor = NULL;
-
-    HANDLE read_pipe = NULL, write_pipe = NULL;
-    if (!CreatePipe(&read_pipe, &write_pipe, &sa, 0))
-        return -1;
-    SetHandleInformation(read_pipe, HANDLE_FLAG_INHERIT, 0);
-
     STARTUPINFOW si;
     PROCESS_INFORMATION pi;
     ZeroMemory(&si, sizeof(si));
     ZeroMemory(&pi, sizeof(pi));
     si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
-    si.hStdOutput = write_pipe;
-    si.hStdError = write_pipe;
-    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    si.dwFlags = STARTF_USESHOWWINDOW;
     si.wShowWindow = SW_HIDE;
 
     wchar_t *mutable_cmd = _wcsdup(wrapped);
-    if (!mutable_cmd) {
-        CloseHandle(read_pipe);
-        CloseHandle(write_pipe);
+    if (!mutable_cmd)
         return -1;
-    }
 
     BOOL ok = CreateProcessW(
-        NULL, mutable_cmd, NULL, NULL, TRUE,
+        NULL, mutable_cmd, NULL, NULL, FALSE,
         CREATE_NO_WINDOW,
         NULL, NULL, &si, &pi);
 
-    CloseHandle(write_pipe);
     free(mutable_cmd);
 
     if (!ok) {
         append_log(L"CreateProcess failed: %lu", GetLastError());
-        CloseHandle(read_pipe);
+        DeleteFileW(batch);
         return -1;
     }
 
-    char buf[4096];
-    DWORD read_bytes;
-    while (ReadFile(read_pipe, buf, sizeof(buf) - 1, &read_bytes, NULL) && read_bytes > 0) {
-        buf[read_bytes] = '\0';
-        fputs(buf, g_log);
-        fflush(g_log);
+    long capture_offset = 0;
+    for (;;) {
+        DWORD wait = WaitForSingleObject(pi.hProcess, 500);
+        tail_capture_to_log(capture, &capture_offset);
+        if (wait == WAIT_OBJECT_0)
+            break;
     }
-    CloseHandle(read_pipe);
+    tail_capture_to_log(capture, &capture_offset);
 
-    WaitForSingleObject(pi.hProcess, INFINITE);
     DWORD exit_code = 1;
     GetExitCodeProcess(pi.hProcess, &exit_code);
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
     DeleteFileW(batch);
+    DeleteFileW(capture);
+    append_log(L"Docling exit code: %lu", exit_code);
     return (int)exit_code;
 }
 
@@ -936,6 +983,7 @@ int wmain(int argc, wchar_t **argv)
         wait_before_exit();
         return 1;
     }
+    resolve_docling_invoke();
 
     wchar_t stamp[64];
     make_log_timestamp(stamp, 64);
@@ -946,6 +994,8 @@ int wmain(int argc, wchar_t **argv)
 
     append_log(L"Started v%ls", VERSION);
     append_log(L"Docling: %s", g_cfg.docling_exe);
+    if (g_cfg.docling_via_python)
+        append_log(L"Invoke: %s %s", g_cfg.docling_invoke, g_cfg.docling_prefix);
     append_log(L"PILLOW_MAX_IMAGE_PIXELS=%s", get_pillow_max());
     if (g_cfg.doc_timeout_sec > 0)
         append_log(L"Document timeout: %d sec", g_cfg.doc_timeout_sec);
