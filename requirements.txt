@@ -1,1 +1,3 @@
 docling>=2.0
+# Для русского OCR без установки Tesseract:
+# pip install easyocr

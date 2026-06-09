@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Docling batch parser v3.1.2 — single-file runner.
+Docling batch parser v3.1.3 — single-file runner.
 
 docs/  ->  parsed/  (.md + .html)
 """
@@ -27,9 +27,18 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Iterator, Literal
 
-VERSION = "3.1.2"
-DEFAULT_OCR_ENGINE = "tesseract"
+VERSION = "3.1.3"
+DEFAULT_OCR_ENGINE = "auto"
 DEFAULT_OCR_LANG = "rus"
+
+_resolved_ocr_engine: str | None = None
+_resolved_ocr_lang: str | None = None
+_ocr_runtime_note: str = ""
+
+_COMMON_TESSERACT_DIRS: tuple[Path, ...] = (
+    Path(r"C:\Program Files\Tesseract-OCR"),
+    Path(r"C:\Program Files (x86)\Tesseract-OCR"),
+)
 
 DEFAULT_PILLOW = "9999999999"
 DEFAULT_OCR_MAX_PIXELS = 50_000_000
@@ -57,6 +66,7 @@ CONVERSION_FAILURE_MARKERS = (
     "Could not load image",
     "No module named docling",
     "cannot be directly executed",
+    "Tesseract is not available",
 )
 
 OUTPUT_SUFFIXES = (".md", ".html", ".json", ".txt")
@@ -204,11 +214,126 @@ def ocr_max_pixels() -> int:
     return DEFAULT_OCR_MAX_PIXELS
 
 
+def _tesseract_search_dirs() -> list[Path]:
+    dirs = [p for p in _COMMON_TESSERACT_DIRS if p.is_dir()]
+    if local := os.environ.get("LOCALAPPDATA"):
+        candidate = Path(local) / "Programs" / "Tesseract-OCR"
+        if candidate.is_dir():
+            dirs.append(candidate)
+    return dirs
+
+
+def augment_tesseract_path() -> None:
+    extra = [str(p) for p in _tesseract_search_dirs()]
+    if not extra:
+        return
+    path = os.environ.get("PATH", "")
+    for entry in extra:
+        if entry not in path.split(os.pathsep):
+            path = entry + os.pathsep + path
+    os.environ["PATH"] = path
+
+
+def find_tesseract_exe() -> Path | None:
+    augment_tesseract_path()
+    if hit := shutil.which("tesseract"):
+        return Path(hit)
+    for directory in _tesseract_search_dirs():
+        exe = directory / "tesseract.exe"
+        if exe.is_file():
+            return exe
+    return None
+
+
+def easyocr_available() -> bool:
+    try:
+        import easyocr  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _normalize_ocr_lang(engine: str, lang: str) -> str:
+    raw = lang.strip()
+    if not raw:
+        raw = DEFAULT_OCR_LANG
+    if engine == "easyocr":
+        parts = []
+        for token in raw.replace("+", ",").split(","):
+            token = token.strip().lower()
+            if not token:
+                continue
+            if token in {"rus", "ru", "russian"}:
+                parts.append("ru")
+            elif token in {"eng", "en", "english"}:
+                parts.append("en")
+            else:
+                parts.append(token)
+        return ",".join(parts) or "ru"
+    if engine == "rapidocr":
+        return "en"
+    parts = []
+    for token in raw.replace("+", ",").split(","):
+        token = token.strip().lower()
+        if not token:
+            continue
+        if token in {"ru", "russian"}:
+            parts.append("rus")
+        elif token in {"en", "english"}:
+            parts.append("eng")
+        else:
+            parts.append(token)
+    return ",".join(parts) or "rus"
+
+
+def setup_ocr_runtime() -> None:
+    global _resolved_ocr_engine, _resolved_ocr_lang, _ocr_runtime_note
+    requested = os.environ.get("DOCLING_OCR_ENGINE", DEFAULT_OCR_ENGINE).strip().lower()
+    requested_lang = os.environ.get("DOCLING_OCR_LANG", DEFAULT_OCR_LANG).strip()
+
+    if requested in {"", "auto"}:
+        if find_tesseract_exe() is not None:
+            _resolved_ocr_engine = "tesseract"
+            _resolved_ocr_lang = _normalize_ocr_lang("tesseract", requested_lang)
+            _ocr_runtime_note = ""
+        elif easyocr_available():
+            _resolved_ocr_engine = "easyocr"
+            _resolved_ocr_lang = _normalize_ocr_lang("easyocr", requested_lang)
+            _ocr_runtime_note = "easyocr"
+        else:
+            _resolved_ocr_engine = "rapidocr"
+            _resolved_ocr_lang = _normalize_ocr_lang("rapidocr", requested_lang)
+            _ocr_runtime_note = "rapidocr-warn"
+    elif requested == "tesseract":
+        _resolved_ocr_engine = "tesseract"
+        _resolved_ocr_lang = _normalize_ocr_lang("tesseract", requested_lang)
+        _ocr_runtime_note = "" if find_tesseract_exe() is not None else "tesseract-missing"
+    elif requested == "easyocr":
+        _resolved_ocr_engine = "easyocr"
+        _resolved_ocr_lang = _normalize_ocr_lang("easyocr", requested_lang)
+        _ocr_runtime_note = "" if easyocr_available() else "easyocr-missing"
+    else:
+        _resolved_ocr_engine = requested
+        _resolved_ocr_lang = _normalize_ocr_lang(requested, requested_lang)
+        _ocr_runtime_note = ""
+
+    os.environ["DOCLING_OCR_ENGINE"] = _resolved_ocr_engine
+    os.environ["DOCLING_OCR_LANG"] = _resolved_ocr_lang
+
+
+def ocr_runtime_note() -> str:
+    return _ocr_runtime_note
+
+
 def ocr_engine_name() -> str:
+    if _resolved_ocr_engine is not None:
+        return _resolved_ocr_engine
     return os.environ.get("DOCLING_OCR_ENGINE", DEFAULT_OCR_ENGINE)
 
 
 def ocr_lang_codes() -> str:
+    if _resolved_ocr_lang is not None:
+        return _resolved_ocr_lang
     return os.environ.get("DOCLING_OCR_LANG", DEFAULT_OCR_LANG)
 
 
@@ -895,10 +1020,23 @@ def main() -> int:
             input("Enter...")
         return 1
 
+    setup_ocr_runtime()
     say(f"Docling: {runtime.label}")
+    ocr_note = ocr_runtime_note()
     say(f"OCR:     {ocr_engine_name()} / lang={ocr_lang_codes()}")
+    if ocr_note == "rapidocr-warn":
+        say("  WARN: tesseract/easyocr ne najdeny — dlya kirillicy:")
+        say("    pip install easyocr")
+        say("    ili ustanovite Tesseract + Russian")
+    elif ocr_note == "easyocr":
+        say("  (auto: tesseract ne najden, ispolzuetsya easyocr)")
+    elif ocr_note == "tesseract-missing":
+        say("  WARN: tesseract ne najden v PATH")
+        say("    pip install easyocr   ili ustanovite Tesseract + Russian")
+    elif ocr_note == "easyocr-missing":
+        say("  WARN: easyocr ne ustanovlen — pip install easyocr")
     log_append(app, f"Docling runtime: {runtime.label}")
-    log_append(app, f"OCR engine={ocr_engine_name()} lang={ocr_lang_codes()}")
+    log_append(app, f"OCR engine={ocr_engine_name()} lang={ocr_lang_codes()} note={ocr_note}")
     say(f"Input:   {app.docs}")
     say(f"Output:  {app.parsed}")
     say(f"Log:     {app.log_file}")
