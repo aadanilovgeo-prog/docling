@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Docling batch parser v2.0.3 — Python port of BAT v1.6 logic.
+Docling batch parser v2.0.4 — Python port of BAT v1.6 logic.
 
 docs/  ->  parsed/  (.md + .html)
 """
@@ -23,7 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
-VERSION = "2.0.3"
+VERSION = "2.0.4"
 
 _runtime: "DoclingRuntime | None" = None
 DEFAULT_PILLOW = "9999999999"
@@ -218,12 +218,19 @@ def apply_pillow_limit() -> None:
         pass
 
 
+def _subprocess_flags() -> int:
+    if sys.platform == "win32":
+        return subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
+    return 0
+
+
 def python_has_docling(py: Path) -> bool:
     try:
         proc = subprocess.run(
-            [str(py), "-c", "import docling"],
+            [str(py), "-c", "import docling.cli.main"],
             capture_output=True,
-            timeout=60,
+            timeout=120,
+            creationflags=_subprocess_flags(),
         )
         return proc.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
@@ -238,40 +245,33 @@ def python_beside_docling_exe() -> Path | None:
     return py if py.is_file() else None
 
 
+def _make_runtime(py: Path) -> DoclingRuntime:
+    if py.resolve() == Path(sys.executable).resolve():
+        return DoclingRuntime("inprocess", py, f"in-process ({py})")
+    return DoclingRuntime("subprocess", py, f"subprocess ({py})")
+
+
 def resolve_docling_runtime() -> DoclingRuntime | None:
-    """Find Python with docling (miniconda Scripts\\python.exe, DOCLING_PYTHON, …)."""
+    """Find Python for docling. Never use docling.exe (PILLOW env is lost)."""
     global _runtime
     if _runtime is not None:
         return _runtime
 
-    candidates: list[Path] = []
     env_py = os.environ.get("DOCLING_PYTHON")
     if env_py:
-        candidates.append(Path(env_py))
-
-    candidates.append(Path(sys.executable))
+        py = Path(env_py)
+        if py.is_file():
+            _runtime = _make_runtime(py)
+            return _runtime
 
     beside = python_beside_docling_exe()
     if beside:
-        candidates.append(beside)
-
-    seen: set[str] = set()
-    for py in candidates:
-        key = str(py.resolve()) if py.exists() else str(py)
-        if key in seen or not py.is_file():
-            continue
-        seen.add(key)
-        if not python_has_docling(py):
-            continue
-        if py.resolve() == Path(sys.executable).resolve():
-            _runtime = DoclingRuntime("inprocess", py, f"in-process ({py})")
-        else:
-            _runtime = DoclingRuntime("subprocess", py, f"subprocess ({py})")
+        _runtime = DoclingRuntime("subprocess", beside, f"subprocess ({beside})")
         return _runtime
 
-    doc = shutil.which("docling")
-    if doc and Path(doc).is_file():
-        _runtime = DoclingRuntime("subprocess", Path(doc), f"docling.exe ({doc})")
+    current = Path(sys.executable)
+    if current.is_file() and python_has_docling(current):
+        _runtime = DoclingRuntime("inprocess", current, f"in-process ({current})")
         return _runtime
 
     return None
@@ -361,6 +361,7 @@ def run_docling_subprocess_cmd(cmd: list[str], app: App) -> tuple[int, str]:
         text=True,
         encoding="utf-8",
         errors="replace",
+        creationflags=_subprocess_flags(),
     )
     out = proc.stdout or ""
     _write_log_output(app, out)
@@ -369,9 +370,6 @@ def run_docling_subprocess_cmd(cmd: list[str], app: App) -> tuple[int, str]:
 
 
 def build_subprocess_cmd(runtime: DoclingRuntime, args: list[str]) -> list[str]:
-    py_name = runtime.python.name.lower()
-    if py_name in ("docling.exe", "docling"):
-        return [str(runtime.python), *args]
     return [str(runtime.python), "-u", "-m", "docling.cli.main", *args]
 
 
