@@ -21,8 +21,8 @@
 
 | Способ | Ссылка |
 |--------|--------|
-| **Файл в репозитории** | [dist/run_docling_parse_v3.0.exe](dist/run_docling_parse_v3.0.exe) |
-| **Прямая ссылка** | https://github.com/aadanilovgeo-prog/docling/raw/main/dist/run_docling_parse_v3.0.exe |
+| **Файл в репозитории** | [run_docling_parse_v3.0.exe](run_docling_parse_v3.0.exe) (корень, рядом с BAT) |
+| **Прямая ссылка** | https://github.com/aadanilovgeo-prog/docling/raw/main/run_docling_parse_v3.0.exe |
 | **Release** | https://github.com/aadanilovgeo-prog/docling/releases/tag/latest-build |
 
 Сборка на каждый push в `main` (изменения `src/`): GitHub Actions → [Build Windows EXE](.github/workflows/build-exe.yml).

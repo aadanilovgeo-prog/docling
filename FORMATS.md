@@ -24,4 +24,4 @@ pip install docling
 pip install "docling[asr]"
 ```
 
-C: `build.bat` → `run_docling_parse_v3.0.exe` (запуск без BAT).
+C: `build.bat` → `run_docling_parse_v3.0.exe` в корне репозитория (запуск без BAT).

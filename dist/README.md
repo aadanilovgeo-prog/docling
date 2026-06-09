@@ -1,21 +1,16 @@
-# run_docling_parse_v3.0.exe
+# dist/
 
-Готовый бинарник для Windows x64 (C v3.0).
+Папка для артефактов CI. **Готовый exe лежит в корне репозитория** (рядом с `run_docling_parse_v1.5.bat`):
 
-## Скачать
+## Скачать `run_docling_parse_v3.0.exe`
 
-- **Прямая ссылка (main):**  
-  https://github.com/aadanilovgeo-prog/docling/raw/main/dist/run_docling_parse_v3.0.exe
+- **Файл в репозитории:**  
+  https://github.com/aadanilovgeo-prog/docling/blob/main/run_docling_parse_v3.0.exe
 
-- **Releases:**  
+- **Прямая ссылка:**  
+  https://github.com/aadanilovgeo-prog/docling/raw/main/run_docling_parse_v3.0.exe
+
+- **Release:**  
   https://github.com/aadanilovgeo-prog/docling/releases/tag/latest-build
 
-- **Артефакт CI:** вкладка Actions → последний успешный workflow → Artifacts
-
-Файл пересобирается автоматически при изменении `src/run_docling_parse.c`.
-
-## Использование
-
-1. Скопируйте `run_docling_parse_v3.0.exe` в папку проекта (рядом с `docs\`).
-2. Двойной щелчок — BAT не нужен.
-3. Нужен `docling` в PATH: `pip install docling`
+Пересборка при изменении `src/run_docling_parse.c`.
